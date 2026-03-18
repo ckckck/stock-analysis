@@ -1,3 +1,4 @@
 .upstreams/
 .factory/
+.worktrees/
 .DS_Store
