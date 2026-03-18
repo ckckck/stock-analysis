@@ -532,6 +532,66 @@ export namespace models {
 	        this.enabled = source["enabled"];
 	    }
 	}
+	export class ScreeningMarketScopeConfig {
+	    shanghai: boolean;
+	    shenzhen: boolean;
+	    beijing: boolean;
+	    indices: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new ScreeningMarketScopeConfig(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.shanghai = source["shanghai"];
+	        this.shenzhen = source["shenzhen"];
+	        this.beijing = source["beijing"];
+	        this.indices = source["indices"];
+	    }
+	}
+	export class ScreeningConfig {
+	    markets: ScreeningMarketScopeConfig;
+	    initialSyncDays: number;
+	    retentionMode: string;
+	    retentionDays: number;
+	    autoSyncEnabled: boolean;
+	    autoSyncTime: string;
+	    defaultResultLimit: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ScreeningConfig(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.markets = this.convertValues(source["markets"], ScreeningMarketScopeConfig);
+	        this.initialSyncDays = source["initialSyncDays"];
+	        this.retentionMode = source["retentionMode"];
+	        this.retentionDays = source["retentionDays"];
+	        this.autoSyncEnabled = source["autoSyncEnabled"];
+	        this.autoSyncTime = source["autoSyncTime"];
+	        this.defaultResultLimit = source["defaultResultLimit"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class AppConfig {
 	    theme: string;
 	    candleColorMode: string;
@@ -545,6 +605,7 @@ export namespace models {
 	    layout: LayoutConfig;
 	    openClaw: OpenClawConfig;
 	    indicators: IndicatorConfig;
+	    screening: ScreeningConfig;
 
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -564,6 +625,7 @@ export namespace models {
 	        this.layout = this.convertValues(source["layout"], LayoutConfig);
 	        this.openClaw = this.convertValues(source["openClaw"], OpenClawConfig);
 	        this.indicators = this.convertValues(source["indicators"], IndicatorConfig);
+	        this.screening = this.convertValues(source["screening"], ScreeningConfig);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
