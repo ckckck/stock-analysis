@@ -46,11 +46,11 @@ type MCPServerConfig struct {
 	ID            string           `json:"id"`
 	Name          string           `json:"name"`
 	TransportType MCPTransportType `json:"transportType"`
-	Endpoint      string           `json:"endpoint"`      // HTTP/SSE 端点 URL
-	Command       string           `json:"command"`       // 命令行传输的命令
-	Args          []string         `json:"args"`          // 命令行参数
-	ToolFilter    []string         `json:"toolFilter"`    // 工具过滤列表（空则全部）
-	Enabled       bool             `json:"enabled"`       // 是否启用
+	Endpoint      string           `json:"endpoint"`   // HTTP/SSE 端点 URL
+	Command       string           `json:"command"`    // 命令行传输的命令
+	Args          []string         `json:"args"`       // 命令行参数
+	ToolFilter    []string         `json:"toolFilter"` // 工具过滤列表（空则全部）
+	Enabled       bool             `json:"enabled"`    // 是否启用
 }
 
 // AppConfig 应用配置
@@ -67,6 +67,7 @@ type AppConfig struct {
 	Layout          LayoutConfig      `json:"layout"`        // 界面布局配置
 	OpenClaw        OpenClawConfig    `json:"openClaw"`      // OpenClaw 服务配置
 	Indicators      IndicatorConfig   `json:"indicators"`    // 技术指标配置
+	Screening       ScreeningConfig   `json:"screening"`     // AI筛选配置
 }
 
 // ProxyMode 代理模式
@@ -118,6 +119,33 @@ type IndicatorConfig struct {
 	MACD MACDConfig `json:"macd"`
 	RSI  RSIConfig  `json:"rsi"`
 	KDJ  KDJConfig  `json:"kdj"`
+}
+
+// ScreeningRetentionMode AI筛选数据保留模式
+type ScreeningRetentionMode string
+
+const (
+	ScreeningRetentionModeForever ScreeningRetentionMode = "forever"
+	ScreeningRetentionModeDays    ScreeningRetentionMode = "days"
+)
+
+// ScreeningMarketScopeConfig AI筛选同步市场范围
+type ScreeningMarketScopeConfig struct {
+	Shanghai bool `json:"shanghai"`
+	Shenzhen bool `json:"shenzhen"`
+	Beijing  bool `json:"beijing"`
+	Indices  bool `json:"indices"`
+}
+
+// ScreeningConfig AI筛选配置
+type ScreeningConfig struct {
+	Markets            ScreeningMarketScopeConfig `json:"markets"`
+	InitialSyncDays    int                        `json:"initialSyncDays"`
+	RetentionMode      ScreeningRetentionMode     `json:"retentionMode"`
+	RetentionDays      int                        `json:"retentionDays"`
+	AutoSyncEnabled    bool                       `json:"autoSyncEnabled"`
+	AutoSyncTime       string                     `json:"autoSyncTime"`
+	DefaultResultLimit int                        `json:"defaultResultLimit"`
 }
 
 type MAConfig struct {

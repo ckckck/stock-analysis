@@ -1,8 +1,11 @@
 // 配置服务 - 调用后端API
 import { GetConfig, UpdateConfig, GetAvailableTools, TestAIConnection } from '@wailsjs/go/main/App';
 import type { models } from '@wailsjs/go/models';
+import type { ScreeningConfig } from '../types';
 
-export type AppConfig = models.AppConfig;
+export type AppConfig = Omit<models.AppConfig, 'screening'> & {
+  screening: ScreeningConfig;
+};
 
 // 内置工具信息
 export interface ToolInfo {
@@ -11,11 +14,11 @@ export interface ToolInfo {
 }
 
 export const getConfig = async (): Promise<AppConfig> => {
-  return await GetConfig();
+  return await GetConfig() as AppConfig;
 };
 
 export const updateConfig = async (config: AppConfig): Promise<string> => {
-  return await UpdateConfig(config);
+  return await UpdateConfig(config as unknown as models.AppConfig);
 };
 
 // 获取可用的内置工具列表

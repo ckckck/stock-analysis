@@ -62,6 +62,20 @@ func (cs *ConfigService) loadConfig() error {
 
 	// 用于识别字段是否在 JSON 中显式存在（避免把用户明确设置的 false 当成缺失字段）
 	var raw struct {
+		Screening *struct {
+			Markets *struct {
+				Shanghai *bool `json:"shanghai"`
+				Shenzhen *bool `json:"shenzhen"`
+				Beijing  *bool `json:"beijing"`
+				Indices  *bool `json:"indices"`
+			} `json:"markets"`
+			InitialSyncDays    *int                           `json:"initialSyncDays"`
+			RetentionMode      *models.ScreeningRetentionMode `json:"retentionMode"`
+			RetentionDays      *int                           `json:"retentionDays"`
+			AutoSyncEnabled    *bool                          `json:"autoSyncEnabled"`
+			AutoSyncTime       *string                        `json:"autoSyncTime"`
+			DefaultResultLimit *int                           `json:"defaultResultLimit"`
+		} `json:"screening"`
 		Indicators struct {
 			MA struct {
 				Enabled *bool `json:"enabled"`
@@ -89,7 +103,10 @@ func (cs *ConfigService) loadConfig() error {
 
 	// 旧配置文件可能缺少 indicators 字段，Go 零值（nil/0/0.0）会导致前端异常
 	// 用默认值补全所有未设置的字段
-	d := cs.defaultConfig().Indicators
+	defaultConfig := cs.defaultConfig()
+	applyScreeningDefaults(&config, raw.Screening, defaultConfig.Screening)
+
+	d := defaultConfig.Indicators
 	ind := &config.Indicators
 	if raw.Indicators.MA.Enabled == nil {
 		ind.MA.Enabled = d.MA.Enabled
@@ -168,6 +185,80 @@ func (cs *ConfigService) defaultConfig() *models.AppConfig {
 			RSI:  models.RSIConfig{Enabled: false, Period: 14},
 			KDJ:  models.KDJConfig{Enabled: false, Period: 9, K: 3, D: 3},
 		},
+		Screening: models.ScreeningConfig{
+			Markets: models.ScreeningMarketScopeConfig{
+				Shanghai: true,
+				Shenzhen: true,
+				Beijing:  false,
+				Indices:  false,
+			},
+			InitialSyncDays:    30,
+			RetentionMode:      models.ScreeningRetentionModeForever,
+			RetentionDays:      60,
+			AutoSyncEnabled:    false,
+			AutoSyncTime:       "18:00",
+			DefaultResultLimit: 100,
+		},
+	}
+}
+
+func applyScreeningDefaults(
+	config *models.AppConfig,
+	raw *struct {
+		Markets *struct {
+			Shanghai *bool `json:"shanghai"`
+			Shenzhen *bool `json:"shenzhen"`
+			Beijing  *bool `json:"beijing"`
+			Indices  *bool `json:"indices"`
+		} `json:"markets"`
+		InitialSyncDays    *int                           `json:"initialSyncDays"`
+		RetentionMode      *models.ScreeningRetentionMode `json:"retentionMode"`
+		RetentionDays      *int                           `json:"retentionDays"`
+		AutoSyncEnabled    *bool                          `json:"autoSyncEnabled"`
+		AutoSyncTime       *string                        `json:"autoSyncTime"`
+		DefaultResultLimit *int                           `json:"defaultResultLimit"`
+	},
+	defaults models.ScreeningConfig,
+) {
+	if raw == nil {
+		config.Screening = defaults
+		return
+	}
+
+	screening := &config.Screening
+	if raw.Markets == nil {
+		screening.Markets = defaults.Markets
+	} else {
+		if raw.Markets.Shanghai == nil {
+			screening.Markets.Shanghai = defaults.Markets.Shanghai
+		}
+		if raw.Markets.Shenzhen == nil {
+			screening.Markets.Shenzhen = defaults.Markets.Shenzhen
+		}
+		if raw.Markets.Beijing == nil {
+			screening.Markets.Beijing = defaults.Markets.Beijing
+		}
+		if raw.Markets.Indices == nil {
+			screening.Markets.Indices = defaults.Markets.Indices
+		}
+	}
+	if raw.InitialSyncDays == nil || screening.InitialSyncDays == 0 {
+		screening.InitialSyncDays = defaults.InitialSyncDays
+	}
+	if raw.RetentionMode == nil || screening.RetentionMode == "" {
+		screening.RetentionMode = defaults.RetentionMode
+	}
+	if raw.RetentionDays == nil || screening.RetentionDays == 0 {
+		screening.RetentionDays = defaults.RetentionDays
+	}
+	if raw.AutoSyncEnabled == nil {
+		screening.AutoSyncEnabled = defaults.AutoSyncEnabled
+	}
+	if raw.AutoSyncTime == nil || screening.AutoSyncTime == "" {
+		screening.AutoSyncTime = defaults.AutoSyncTime
+	}
+	if raw.DefaultResultLimit == nil || screening.DefaultResultLimit == 0 {
+		screening.DefaultResultLimit = defaults.DefaultResultLimit
 	}
 }
 

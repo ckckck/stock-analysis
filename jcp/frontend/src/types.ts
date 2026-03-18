@@ -120,3 +120,22 @@ export interface MarketStatus {
   isTradeDay: boolean;   // 是否交易日
   holidayName: string;   // 节假日名称
 }
+
+export type ScreeningRetentionMode = 'forever' | 'days';
+
+export interface ScreeningMarketScopeConfig {
+  shanghai: boolean;
+  shenzhen: boolean;
+  beijing: boolean;
+  indices: boolean;
+}
+
+export interface ScreeningConfig {
+  markets: ScreeningMarketScopeConfig;
+  initialSyncDays: number;
+  retentionMode: ScreeningRetentionMode;
+  retentionDays: number;
+  autoSyncEnabled: boolean;
+  autoSyncTime: string;
+  defaultResultLimit: number;
+}
