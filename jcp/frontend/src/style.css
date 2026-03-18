@@ -1,0 +1,360 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        --bg-0: #0a120b;
+        --bg-1: #121f14;
+        --panel: rgba(18, 31, 20, 0.72);
+        --panel-strong: rgba(18, 31, 20, 0.92);
+        --panel-soft: rgba(18, 31, 20, 0.56);
+        --stroke: rgba(107, 142, 35, 0.18);
+        --stroke-strong: rgba(107, 142, 35, 0.28);
+        --text-0: #e2e8e0;
+        --text-1: #9ca88b;
+        --text-2: #6a7a5b;
+        --accent: #6b8e23;
+        --accent-2: #8fbc3b;
+        --shadow: rgba(0, 0, 0, 0.35);
+        --shadow-strong: rgba(0, 0, 0, 0.5);
+        --is-dark: 1;
+    }
+
+    html {
+        background-color: var(--bg-0);
+        text-align: center;
+        color: var(--text-0);
+    }
+
+    body {
+        margin: 0;
+        color: var(--text-0);
+        font-family: "IBM Plex Sans", "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI",
+            "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+            sans-serif;
+        background-color: var(--bg-0);
+        background-attachment: fixed;
+    }
+
+    code, pre, .font-mono {
+        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    #root {
+        height: 100vh;
+        text-align: center;
+    }
+}
+
+@layer components {
+    .fin-app {
+        background-color: var(--bg-0);
+        background-image:
+            radial-gradient(1200px circle at 12% -10%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 58%),
+            radial-gradient(900px circle at 105% 5%, color-mix(in srgb, var(--accent-2) 12%, transparent), transparent 48%),
+            linear-gradient(180deg, var(--bg-0), var(--bg-1)),
+            linear-gradient(color-mix(in srgb, var(--accent) 6%, transparent) 1px, transparent 1px),
+            linear-gradient(90deg, color-mix(in srgb, var(--accent) 4%, transparent) 1px, transparent 1px);
+        background-size: auto, auto, auto, 24px 24px, 24px 24px;
+        background-position: center;
+    }
+
+    .fin-panel {
+        background: var(--panel);
+        box-shadow: 0 12px 28px var(--shadow), inset 0 1px 0 color-mix(in srgb, var(--accent) 6%, transparent);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+    }
+
+    .fin-panel-strong {
+        background: var(--panel-strong);
+        box-shadow: 0 10px 24px var(--shadow-strong), inset 0 1px 0 color-mix(in srgb, var(--accent) 8%, transparent);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+    }
+
+    .fin-panel-soft {
+        background: var(--panel-soft);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+    }
+
+    /* 卡片式面板 - 用于主要区块，带圆角和阴影 */
+    .fin-panel-card {
+        background: var(--panel);
+        border-radius: 12px;
+        box-shadow: 0 4px 16px var(--shadow), 0 1px 3px rgba(0, 0, 0, 0.1);
+        border: 1px solid var(--stroke);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+    }
+
+    /* 中间面板 - 左右有圆角和边框阴影，上下紧贴 */
+    .fin-panel-center {
+        background: var(--panel);
+        border-left: 1px solid var(--stroke);
+        border-right: 1px solid var(--stroke);
+        box-shadow: -4px 0 16px var(--shadow), 4px 0 16px var(--shadow);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+    }
+
+    .fin-divider {
+        border-color: var(--stroke);
+    }
+
+    /* 柔和分隔线 - 用于卡片内部分隔 */
+    .fin-divider-soft {
+        border-color: color-mix(in srgb, var(--stroke) 50%, transparent);
+    }
+
+    .fin-input {
+        background: var(--bg-1);
+        border: 1px solid var(--stroke);
+        color: var(--text-0);
+        box-shadow: inset 0 1px 0 color-mix(in srgb, var(--accent) 5%, transparent);
+    }
+
+    .fin-input::placeholder {
+        color: var(--text-1);
+    }
+
+    .fin-input:focus {
+        outline: none;
+        border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+    }
+
+    .fin-chip {
+        background: var(--panel-soft);
+        border: 1px solid var(--stroke);
+    }
+
+    .fin-glow {
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent), 0 16px 36px var(--shadow-strong);
+    }
+
+    /* 自定义滚动条样式 */
+    .fin-scrollbar {
+        scrollbar-width: thin;
+        scrollbar-color: color-mix(in srgb, var(--accent) 30%, transparent) transparent;
+    }
+
+    .fin-scrollbar::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+
+    .fin-scrollbar::-webkit-scrollbar-track {
+        background: var(--panel-soft);
+        border-radius: 3px;
+    }
+
+    .fin-scrollbar::-webkit-scrollbar-thumb {
+        background: color-mix(in srgb, var(--accent) 40%, transparent);
+        border-radius: 3px;
+        transition: background 0.2s;
+    }
+
+    .fin-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: color-mix(in srgb, var(--accent) 60%, transparent);
+    }
+
+    /* Agent 消息气泡 Markdown 样式 */
+    .agent-message-content {
+        font-size: 0.875rem;
+        line-height: 1.6;
+        text-align: left;
+    }
+
+    .agent-message-content p {
+        margin: 0 0 0.5em 0;
+    }
+
+    .agent-message-content p:last-child {
+        margin-bottom: 0;
+    }
+
+    .agent-message-content strong {
+        color: var(--accent);
+        font-weight: 600;
+    }
+
+    .agent-message-content em {
+        color: var(--accent-2);
+        font-style: italic;
+    }
+
+    .agent-message-content ul,
+    .agent-message-content ol {
+        margin: 0.5em 0;
+        padding-left: 1.25em;
+    }
+
+    .agent-message-content li {
+        margin: 0.25em 0;
+    }
+
+    .agent-message-content code {
+        background: color-mix(in srgb, var(--accent) 15%, transparent);
+        color: var(--accent);
+        padding: 0.15em 0.4em;
+        border-radius: 4px;
+        font-size: 0.85em;
+    }
+
+    .agent-message-content pre {
+        background: var(--bg-1);
+        border: 1px solid var(--stroke);
+        border-radius: 8px;
+        padding: 0.75em;
+        margin: 0.5em 0;
+        overflow-x: auto;
+    }
+
+    .agent-message-content pre code {
+        background: transparent;
+        padding: 0;
+        color: var(--text-0);
+    }
+
+    .agent-message-content blockquote {
+        border-left: 3px solid var(--accent);
+        margin: 0.5em 0;
+        padding-left: 0.75em;
+        color: var(--text-1);
+        font-style: italic;
+    }
+
+    .agent-message-content h1,
+    .agent-message-content h2,
+    .agent-message-content h3 {
+        color: var(--text-0);
+        font-weight: 600;
+        margin: 0.75em 0 0.5em 0;
+    }
+
+    .agent-message-content h1 { font-size: 1.1em; }
+    .agent-message-content h2 { font-size: 1em; }
+    .agent-message-content h3 { font-size: 0.95em; }
+
+    .agent-message-content a {
+        color: var(--accent);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+    }
+
+    .agent-message-content a:hover {
+        color: var(--accent-2);
+    }
+
+    .agent-message-content hr {
+        border: none;
+        border-top: 1px solid var(--stroke);
+        margin: 0.75em 0;
+    }
+
+    .agent-message-content table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 0.5em 0;
+        font-size: 0.85em;
+    }
+
+    .agent-message-content th,
+    .agent-message-content td {
+        border: 1px solid var(--stroke);
+        padding: 0.4em 0.6em;
+        text-align: left;
+    }
+
+    .agent-message-content th {
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+        font-weight: 600;
+    }
+
+    /* 主题色工具类 */
+    .text-accent { color: var(--accent); }
+    .text-accent-2 { color: var(--accent-2); }
+    .bg-accent { background-color: var(--accent); }
+    .bg-accent-2 { background-color: var(--accent-2); }
+    .border-accent { border-color: var(--accent); }
+    .border-accent-2 { border-color: var(--accent-2); }
+
+    .bg-accent-gradient {
+        background: linear-gradient(to bottom right, var(--accent), var(--accent-2));
+    }
+
+    .hover\:text-accent:hover { color: var(--accent); }
+    .hover\:text-accent-2:hover { color: var(--accent-2); }
+    .hover\:bg-accent:hover { background-color: var(--accent); }
+    .hover\:border-accent:hover { border-color: var(--accent); }
+    .hover\:border-accent\/40:hover { border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+
+    .text-accent\/50 { color: color-mix(in srgb, var(--accent) 50%, transparent); }
+    .bg-accent\/10 { background-color: color-mix(in srgb, var(--accent) 10%, transparent); }
+    .bg-accent\/20 { background-color: color-mix(in srgb, var(--accent) 20%, transparent); }
+    .border-accent\/30 { border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+    .border-accent\/50 { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+
+    /* 主题自适应文字颜色 */
+    .text-theme-0 { color: var(--text-0); }
+    .text-theme-1 { color: var(--text-1); }
+    .text-theme-2 { color: var(--text-2); }
+    .bg-theme-0 { background-color: var(--bg-0); }
+    .bg-theme-1 { background-color: var(--bg-1); }
+
+    /* fin-text 文字颜色类 - 适配深浅主题 */
+    .fin-text-primary { color: var(--text-0); }
+    .fin-text-secondary { color: var(--text-1); }
+    .fin-text-tertiary { color: var(--text-2); }
+
+    /* fin-hover 悬停效果 */
+    .fin-hover {
+        transition: background-color 0.15s ease;
+    }
+    .fin-hover:hover {
+        background-color: color-mix(in srgb, var(--text-1) 15%, transparent);
+    }
+
+    /* fin-list-hover 列表项悬停效果 */
+    .fin-list-hover:hover {
+        background-color: color-mix(in srgb, var(--text-1) 10%, transparent);
+    }
+
+    /* 浅色主题特殊适配 */
+    [data-theme-mode="light"] .fin-panel {
+        box-shadow: 0 4px 12px var(--shadow), 0 1px 3px var(--shadow);
+    }
+
+    [data-theme-mode="light"] .fin-panel-strong {
+        box-shadow: 0 6px 16px var(--shadow-strong), 0 2px 4px var(--shadow);
+    }
+
+    [data-theme-mode="light"] .fin-panel-card {
+        box-shadow: 0 2px 8px var(--shadow), 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+
+    [data-theme-mode="light"] .fin-glow {
+        box-shadow: 0 0 0 1px var(--stroke), 0 8px 20px var(--shadow);
+    }
+
+    /* 浅色主题下的背景网格调整 */
+    [data-theme-mode="light"] .fin-app {
+        background-image:
+            radial-gradient(1200px circle at 12% -10%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 58%),
+            radial-gradient(900px circle at 105% 5%, color-mix(in srgb, var(--accent-2) 8%, transparent), transparent 48%),
+            linear-gradient(180deg, var(--bg-0), var(--bg-1)),
+            linear-gradient(color-mix(in srgb, var(--accent) 8%, transparent) 1px, transparent 1px),
+            linear-gradient(90deg, color-mix(in srgb, var(--accent) 6%, transparent) 1px, transparent 1px);
+    }
+}
+
+/* 全局拖拽鼠标样式 */
+body.grabbing,
+body.grabbing * {
+    cursor: grabbing !important;
+}

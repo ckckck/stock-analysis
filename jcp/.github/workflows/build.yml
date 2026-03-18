@@ -1,0 +1,140 @@
+name: Wails Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  NODE_OPTIONS: "--max-old-space-size=4096"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            output: jcp
+            suffix: tar.gz
+          - platform: windows/amd64
+            os: windows-latest
+            goos: windows
+            goarch: amd64
+            output: jcp.exe
+            suffix: zip
+          - platform: darwin/amd64
+            os: macos-latest
+            goos: darwin
+            goarch: amd64
+            output: jcp.app
+            suffix: zip
+          - platform: darwin/arm64
+            os: macos-latest
+            goos: darwin
+            goarch: arm64
+            output: jcp.app
+            suffix: zip
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Linux Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Get Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+            VERSION=${VERSION#v}
+          else
+            VERSION="0.0.0-dev"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wails build -platform ${{ matrix.platform }} -tags webkit2_41 \
+            -ldflags "-X main.Version=${{ steps.version.outputs.version }}"
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          wails build -platform ${{ matrix.platform }} -tags native_webview2loader -ldflags "-s -w -H=windowsgui -X main.Version=${{ steps.version.outputs.version }}"
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          wails build -platform ${{ matrix.platform }} \
+            -ldflags "-X main.Version=${{ steps.version.outputs.version }}"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd build/bin
+          tar -czvf jcp_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.suffix }} ${{ matrix.output }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Compress-Archive -Path build/bin/${{ matrix.output }} -DestinationPath build/bin/jcp_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.suffix }}
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd build/bin
+          zip -r jcp_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.suffix }} *.app
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jcp-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: build/bin/*.${{ matrix.suffix }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/**/*

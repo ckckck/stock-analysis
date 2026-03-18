@@ -1,0 +1,14 @@
+build/bin
+node_modules
+frontend/dist
+AGENTS.md
+PLAN.md
+PROGRESS_REPORT.md
+CLAUDE.md
+data
+ccjc
+jcp
+mcp-test-client
+scripts
+*_test.go
+docs
