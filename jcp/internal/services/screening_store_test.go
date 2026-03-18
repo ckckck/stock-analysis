@@ -47,6 +47,17 @@ func TestNewScreeningStoreCreatesSchemaAndIndexes(t *testing.T) {
 	}
 }
 
+func TestScreeningStoreDataDirUsesAppDataDirByDefault(t *testing.T) {
+	if got, want := screeningStoreDataDir(), paths.GetDataDir(); got != want {
+		t.Fatalf("screeningStoreDataDir() = %q, want %q", got, want)
+	}
+
+	tempDir := t.TempDir()
+	if got := screeningStoreDataDir(tempDir); got != tempDir {
+		t.Fatalf("screeningStoreDataDir(tempDir) = %q, want %q", got, tempDir)
+	}
+}
+
 func TestScreeningStoreSyncStateAndRunHistoryHelpers(t *testing.T) {
 	tempDir := t.TempDir()
 

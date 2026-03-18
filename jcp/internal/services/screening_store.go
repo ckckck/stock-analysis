@@ -48,8 +48,8 @@ type ScreeningRunResult struct {
 	Amount            float64
 }
 
-func NewScreeningStore(dataDir string) (*ScreeningStore, error) {
-	dbPath := paths.GetScreeningDBPathFrom(dataDir)
+func NewScreeningStore(dataDir ...string) (*ScreeningStore, error) {
+	dbPath := paths.GetScreeningDBPathFrom(screeningStoreDataDir(dataDir...))
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, fmt.Errorf("create screening dir: %w", err)
 	}
@@ -377,4 +377,11 @@ func parseScreeningStoreTime(raw string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("parse screening store time %q: %w", raw, err)
 	}
 	return parsed, nil
+}
+
+func screeningStoreDataDir(dataDir ...string) string {
+	if len(dataDir) > 0 && dataDir[0] != "" {
+		return dataDir[0]
+	}
+	return paths.GetDataDir()
 }

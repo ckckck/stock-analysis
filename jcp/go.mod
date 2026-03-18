@@ -1,6 +1,6 @@
 module github.com/run-bigpig/jcp
 
-go 1.25.0
+go 1.24.4
 
 require (
 	cloud.google.com/go/auth v0.17.0
@@ -12,7 +12,7 @@ require (
 	github.com/run-bigpig/go-github-selfupdate v1.0.1
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/wailsapp/wails/v2 v2.11.0
-	golang.org/x/text v0.34.0
+	golang.org/x/text v0.31.0
 	google.golang.org/adk v0.4.0
 	google.golang.org/genai v1.43.0
 	modernc.org/sqlite v1.21.1
@@ -71,20 +71,21 @@ require (
 	go.opentelemetry.io/otel/sdk v1.38.0 // indirect
 	go.opentelemetry.io/otel/trace v1.38.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/mod v0.33.0 // indirect
-	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
+	golang.org/x/mod v0.31.0 // indirect
+	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/oauth2 v0.32.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/tools v0.42.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/tools v0.39.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251014184007-4626949a642f // indirect
 	google.golang.org/grpc v1.76.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	lukechampine.com/uint128 v1.2.0 // indirect
 	modernc.org/cc/v3 v3.40.0 // indirect
 	modernc.org/ccgo/v3 v3.16.13 // indirect
-	modernc.org/libc v1.70.0 // indirect
+	modernc.org/libc v1.67.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/opt v0.1.4 // indirect
