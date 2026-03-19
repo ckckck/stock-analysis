@@ -33,6 +33,8 @@ type App struct {
 	hotTrendService   *hottrend.HotTrendService
 	longHuBangService *services.LongHuBangService
 	marketPusher      *services.MarketDataPusher
+	screeningStore    *services.ScreeningStore
+	screeningSync     *services.ScreeningSyncService
 	meetingService    *meeting.Service
 	sessionService    *services.SessionService
 	strategyService   *services.StrategyService
@@ -75,6 +77,15 @@ func NewApp() *App {
 
 	marketService := services.NewMarketService()
 	newsService := services.NewNewsService()
+
+	var screeningStore *services.ScreeningStore
+	var screeningSync *services.ScreeningSyncService
+	screeningStore, err = services.NewScreeningStore()
+	if err != nil {
+		log.Warn("screening store init error: %v", err)
+	} else {
+		screeningSync = services.NewScreeningSyncService(configService, screeningStore, marketService)
+	}
 
 	// 初始化龙虎榜服务
 	longHuBangService := services.NewLongHuBangService()
@@ -168,6 +179,8 @@ func NewApp() *App {
 		configService:     configService,
 		marketService:     marketService,
 		newsService:       newsService,
+		screeningStore:    screeningStore,
+		screeningSync:     screeningSync,
 		hotTrendService:   hotTrendSvc,
 		longHuBangService: longHuBangService,
 		meetingService:    meetingService,
@@ -231,6 +244,9 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.marketPusher != nil {
 		a.marketPusher.Stop()
 	}
+	if a.screeningStore != nil {
+		_ = a.screeningStore.Close()
+	}
 	logger.Close()
 }
 
@@ -278,6 +294,32 @@ func (a *App) UpdateConfig(config *models.AppConfig) string {
 	// 更新 OpenClaw 服务配置（热更新）
 	a.applyOpenClawConfig(&config.OpenClaw)
 	return "success"
+}
+
+// RunScreeningSync 手动执行 AI 筛选数据库同步。
+func (a *App) RunScreeningSync() *services.ScreeningSyncStatus {
+	if a.screeningSync == nil {
+		return &services.ScreeningSyncStatus{Error: "screening sync service unavailable"}
+	}
+
+	status, err := a.screeningSync.Sync()
+	if err != nil {
+		return &services.ScreeningSyncStatus{Error: err.Error()}
+	}
+	return status
+}
+
+// GetScreeningSyncStatus 获取 AI 筛选同步状态。
+func (a *App) GetScreeningSyncStatus() *services.ScreeningSyncStatus {
+	if a.screeningSync == nil {
+		return &services.ScreeningSyncStatus{Error: "screening sync service unavailable"}
+	}
+
+	status, err := a.screeningSync.GetStatus()
+	if err != nil {
+		return &services.ScreeningSyncStatus{Error: err.Error()}
+	}
+	return status
 }
 
 // applyOpenClawConfig 应用 OpenClaw 配置变更
