@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/run-bigpig/jcp/internal/adk"
@@ -24,6 +26,50 @@ import (
 
 var log = logger.New("app")
 
+type screeningSQLGeneratorAdapter struct {
+	configService *services.ConfigService
+	modelFactory  *adk.ModelFactory
+}
+
+func (g *screeningSQLGeneratorAdapter) GenerateSQL(ctx context.Context, prompt string, aiConfigID string) (string, error) {
+	if g == nil || g.configService == nil || g.modelFactory == nil {
+		return "", fmt.Errorf("screening sql generator unavailable")
+	}
+
+	aiConfig := resolveAppAIConfig(g.configService.GetConfig(), aiConfigID)
+	if aiConfig == nil {
+		return "", fmt.Errorf("未配置AI服务")
+	}
+	return g.modelFactory.GenerateText(ctx, aiConfig, prompt)
+}
+
+func resolveAppAIConfig(config *models.AppConfig, aiConfigID string) *models.AIConfig {
+	if config == nil {
+		return nil
+	}
+
+	targetID := strings.TrimSpace(aiConfigID)
+	if targetID == "" {
+		targetID = strings.TrimSpace(config.DefaultAIID)
+	}
+	if targetID != "" {
+		for i := range config.AIConfigs {
+			if config.AIConfigs[i].ID == targetID {
+				return &config.AIConfigs[i]
+			}
+		}
+	}
+	for i := range config.AIConfigs {
+		if config.AIConfigs[i].IsDefault {
+			return &config.AIConfigs[i]
+		}
+	}
+	if len(config.AIConfigs) == 0 {
+		return nil
+	}
+	return &config.AIConfigs[0]
+}
+
 // App struct
 type App struct {
 	ctx                context.Context
@@ -36,6 +82,7 @@ type App struct {
 	screeningStore     *services.ScreeningStore
 	screeningSync      *services.ScreeningSyncService
 	screeningScheduler *services.ScreeningScheduler
+	screeningQuery     *services.ScreeningQueryService
 	meetingService     *meeting.Service
 	sessionService     *services.SessionService
 	strategyService    *services.StrategyService
@@ -82,12 +129,21 @@ func NewApp() *App {
 	var screeningStore *services.ScreeningStore
 	var screeningSync *services.ScreeningSyncService
 	var screeningScheduler *services.ScreeningScheduler
+	var screeningQuery *services.ScreeningQueryService
 	screeningStore, err = services.NewScreeningStore()
 	if err != nil {
 		log.Warn("screening store init error: %v", err)
 	} else {
 		screeningSync = services.NewScreeningSyncService(configService, screeningStore, marketService)
 		screeningScheduler = services.NewScreeningScheduler(configService, screeningSync)
+		screeningQuery = services.NewScreeningQueryService(
+			configService,
+			screeningStore,
+			&screeningSQLGeneratorAdapter{
+				configService: configService,
+				modelFactory:  adk.NewModelFactory(),
+			},
+		)
 	}
 
 	// 初始化龙虎榜服务
@@ -185,6 +241,7 @@ func NewApp() *App {
 		screeningStore:     screeningStore,
 		screeningSync:      screeningSync,
 		screeningScheduler: screeningScheduler,
+		screeningQuery:     screeningQuery,
 		hotTrendService:    hotTrendSvc,
 		longHuBangService:  longHuBangService,
 		meetingService:     meetingService,
@@ -334,6 +391,45 @@ func (a *App) GetScreeningSyncStatus() *services.ScreeningSyncStatus {
 		return &services.ScreeningSyncStatus{Error: err.Error()}
 	}
 	return status
+}
+
+// RunScreeningQuery 执行 AI 筛选。
+func (a *App) RunScreeningQuery(req services.ScreeningQueryRequest) *services.ScreeningQueryResponse {
+	if a.screeningQuery == nil {
+		return &services.ScreeningQueryResponse{Error: "screening query service unavailable"}
+	}
+
+	response, err := a.screeningQuery.Run(context.Background(), req)
+	if err != nil {
+		return &services.ScreeningQueryResponse{Error: err.Error()}
+	}
+	return response
+}
+
+// ListScreeningHistory 返回 AI 筛选历史记录。
+func (a *App) ListScreeningHistory(limit int) *services.ScreeningHistoryResponse {
+	if a.screeningQuery == nil {
+		return &services.ScreeningHistoryResponse{Error: "screening query service unavailable"}
+	}
+
+	items, err := a.screeningQuery.ListHistory(limit)
+	if err != nil {
+		return &services.ScreeningHistoryResponse{Error: err.Error()}
+	}
+	return &services.ScreeningHistoryResponse{Items: items}
+}
+
+// GetScreeningHistoryRun 读取一条历史筛选结果。
+func (a *App) GetScreeningHistoryRun(runID int64, page int, pageSize int) *services.ScreeningQueryResponse {
+	if a.screeningQuery == nil {
+		return &services.ScreeningQueryResponse{Error: "screening query service unavailable"}
+	}
+
+	response, err := a.screeningQuery.GetRun(runID, page, pageSize)
+	if err != nil {
+		return &services.ScreeningQueryResponse{Error: err.Error()}
+	}
+	return response
 }
 
 // applyOpenClawConfig 应用 OpenClaw 配置变更

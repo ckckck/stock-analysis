@@ -147,6 +147,48 @@ func (s *ScreeningStore) initSchema() error {
 		`CREATE INDEX IF NOT EXISTS idx_daily_snapshots_symbol_trade_date ON daily_snapshots (symbol, trade_date DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_screening_runs_created_at ON screening_runs (created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_screening_run_results_run_id_rank ON screening_run_results (run_id, rank)`,
+		`CREATE VIEW IF NOT EXISTS v_stock_latest_daily AS
+			WITH latest_bar AS (
+				SELECT symbol, MAX(trade_date) AS trade_date
+				FROM daily_bars
+				GROUP BY symbol
+			),
+			latest_snapshot AS (
+				SELECT symbol, MAX(trade_date) AS trade_date
+				FROM daily_snapshots
+				GROUP BY symbol
+			)
+			SELECT
+				sb.symbol,
+				sb.name,
+				sb.market,
+				sb.industry,
+				sb.list_date,
+				sb.is_st,
+				sb.is_active,
+				db.trade_date AS snapshot_trade_date,
+				db.open,
+				db.high,
+				db.low,
+				db.close,
+				db.volume,
+				db.amount,
+				COALESCE(ds.price, db.close) AS price,
+				COALESCE(ds.change, 0) AS change,
+				COALESCE(ds.change_percent, 0) AS change_percent,
+				COALESCE(ds.amplitude, 0) AS amplitude,
+				COALESCE(ds.turnover_rate, 0) AS turnover_rate
+			FROM stocks_basic sb
+			JOIN latest_bar lb
+				ON lb.symbol = sb.symbol
+			JOIN daily_bars db
+				ON db.symbol = lb.symbol
+				AND db.trade_date = lb.trade_date
+			LEFT JOIN latest_snapshot ls
+				ON ls.symbol = sb.symbol
+			LEFT JOIN daily_snapshots ds
+				ON ds.symbol = ls.symbol
+				AND ds.trade_date = ls.trade_date`,
 	}
 
 	for _, statement := range statements {
@@ -326,6 +368,40 @@ func (s *ScreeningStore) ListScreeningRuns(limit int) ([]ScreeningRun, error) {
 		return nil, fmt.Errorf("iterate screening runs: %w", err)
 	}
 	return runs, nil
+}
+
+func (s *ScreeningStore) GetScreeningRun(runID int64) (*ScreeningRun, error) {
+	row := s.db.QueryRow(
+		`SELECT id, prompt, market_scope, result_mode, result_limit, generated_sql, matched_count, created_at
+		 FROM screening_runs
+		 WHERE id = ?`,
+		runID,
+	)
+
+	var run ScreeningRun
+	var createdAt string
+	if err := row.Scan(
+		&run.ID,
+		&run.Prompt,
+		&run.MarketScope,
+		&run.ResultMode,
+		&run.ResultLimit,
+		&run.GeneratedSQL,
+		&run.MatchedCount,
+		&createdAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get screening run: %w", err)
+	}
+
+	parsed, err := parseScreeningStoreTime(createdAt)
+	if err != nil {
+		return nil, err
+	}
+	run.CreatedAt = parsed
+	return &run, nil
 }
 
 func (s *ScreeningStore) ListScreeningRunResults(runID int64) ([]ScreeningRunResult, error) {

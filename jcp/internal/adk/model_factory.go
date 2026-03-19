@@ -67,6 +67,41 @@ func (f *ModelFactory) CreateModel(ctx context.Context, config *models.AIConfig)
 	}
 }
 
+// GenerateText 使用指定 AI 配置生成纯文本响应。
+func (f *ModelFactory) GenerateText(ctx context.Context, config *models.AIConfig, prompt string) (string, error) {
+	llm, err := f.CreateModel(ctx, config)
+	if err != nil {
+		return "", err
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Role:  "user",
+				Parts: []*genai.Part{{Text: prompt}},
+			},
+		},
+	}
+
+	var result strings.Builder
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
+		if err != nil {
+			return "", err
+		}
+		if resp == nil || resp.Content == nil {
+			continue
+		}
+		for _, part := range resp.Content.Parts {
+			if part.Thought || part.Text == "" {
+				continue
+			}
+			result.WriteString(part.Text)
+		}
+	}
+
+	return result.String(), nil
+}
+
 // createGeminiModel 创建 Gemini 模型
 func (f *ModelFactory) createGeminiModel(ctx context.Context, config *models.AIConfig) (model.LLM, error) {
 	clientConfig := &genai.ClientConfig{
