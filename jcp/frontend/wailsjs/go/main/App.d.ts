@@ -69,6 +69,10 @@ export function GetOrCreateSession(arg1:string,arg2:string):Promise<models.Stock
 
 export function GetOrderBook(arg1:string):Promise<models.OrderBook>;
 
+export function GetScreeningHistoryRun(arg1:number,arg2:number,arg3:number):Promise<any>;
+
+export function GetScreeningSyncStatus():Promise<any>;
+
 export function GetSessionMessages(arg1:string):Promise<Array<models.ChatMessage>>;
 
 export function GetStockRealTimeData(arg1:Array<string>):Promise<Array<models.Stock>>;
@@ -83,6 +87,8 @@ export function GetTradingSchedule():Promise<services.TradingSchedule>;
 
 export function GetWatchlist():Promise<Array<models.Stock>>;
 
+export function ListScreeningHistory(arg1:number):Promise<any>;
+
 export function Greet(arg1:string):Promise<string>;
 
 export function NotifyFrontendReady():Promise<void>;
@@ -90,6 +96,10 @@ export function NotifyFrontendReady():Promise<void>;
 export function OpenURL(arg1:string):Promise<void>;
 
 export function RemoveFromWatchlist(arg1:string):Promise<string>;
+
+export function RunScreeningQuery(arg1:any):Promise<any>;
+
+export function RunScreeningSync():Promise<any>;
 
 export function RestartApp():Promise<string>;
 

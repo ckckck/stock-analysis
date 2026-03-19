@@ -126,6 +126,14 @@ export function GetOrderBook(arg1) {
   return window['go']['main']['App']['GetOrderBook'](arg1);
 }
 
+export function GetScreeningHistoryRun(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetScreeningHistoryRun'](arg1, arg2, arg3);
+}
+
+export function GetScreeningSyncStatus() {
+  return window['go']['main']['App']['GetScreeningSyncStatus']();
+}
+
 export function GetSessionMessages(arg1) {
   return window['go']['main']['App']['GetSessionMessages'](arg1);
 }
@@ -154,6 +162,10 @@ export function GetWatchlist() {
   return window['go']['main']['App']['GetWatchlist']();
 }
 
+export function ListScreeningHistory(arg1) {
+  return window['go']['main']['App']['ListScreeningHistory'](arg1);
+}
+
 export function Greet(arg1) {
   return window['go']['main']['App']['Greet'](arg1);
 }
@@ -168,6 +180,14 @@ export function OpenURL(arg1) {
 
 export function RemoveFromWatchlist(arg1) {
   return window['go']['main']['App']['RemoveFromWatchlist'](arg1);
+}
+
+export function RunScreeningQuery(arg1) {
+  return window['go']['main']['App']['RunScreeningQuery'](arg1);
+}
+
+export function RunScreeningSync() {
+  return window['go']['main']['App']['RunScreeningSync']();
 }
 
 export function RestartApp() {

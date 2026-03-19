@@ -139,3 +139,59 @@ export interface ScreeningConfig {
   autoSyncTime: string;
   defaultResultLimit: number;
 }
+
+export type AppScreenMode = 'watchlist' | 'screening';
+export type ScreeningResultMode = 'unlimited' | 'top_n';
+export type ScreeningResultPreset = '50' | '100' | '200' | 'unlimited';
+
+export interface ScreeningRunResult {
+  runId: number;
+  symbol: string;
+  name: string;
+  rank: number;
+  score: number;
+  snapshotTradeDate: string;
+  price: number;
+  changePercent: number;
+  volume: number;
+  amount: number;
+}
+
+export interface ScreeningQueryRequest {
+  prompt: string;
+  aiConfigId?: string;
+  resultMode: ScreeningResultMode;
+  resultLimit: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface ScreeningQueryResponse {
+  runId: number;
+  prompt?: string;
+  marketScope: string;
+  resultMode: string;
+  resultLimit: number;
+  generatedSql: string;
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  createdAt?: string;
+  results: ScreeningRunResult[];
+  error?: string;
+}
+
+export interface ScreeningHistoryItem {
+  runId: number;
+  prompt: string;
+  marketScope: string;
+  resultMode: string;
+  resultLimit: number;
+  matchedCount: number;
+  createdAt: string;
+}
+
+export interface ScreeningHistoryResponse {
+  items: ScreeningHistoryItem[];
+  error?: string;
+}

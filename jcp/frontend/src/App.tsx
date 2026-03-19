@@ -7,6 +7,8 @@ import { SettingsDialog } from './components/SettingsDialog';
 import { PositionDialog } from './components/PositionDialog';
 import { HotTrendDialog } from './components/HotTrendDialog';
 import { LongHuBangDialog } from './components/LongHuBangDialog';
+import { ScreeningResultList } from './components/ScreeningResultList';
+import { ScreeningWorkspace } from './components/ScreeningWorkspace';
 import { WelcomePage } from './components/WelcomePage';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { useTheme } from './contexts/ThemeContext';
@@ -16,10 +18,24 @@ import { getWatchlist, addToWatchlist, removeFromWatchlist } from './services/wa
 import { getKLineData, getOrderBook } from './services/stockService';
 import { getOrCreateSession, StockSession, updateStockPosition } from './services/sessionService';
 import { getConfig, updateConfig } from './services/configService';
+import { getScreeningHistoryRun, listScreeningHistory, runScreeningQuery } from './services/screeningService';
 import { useMarketEvents } from './hooks/useMarketEvents';
 import { useMarketStatus } from './hooks/useMarketStatus';
-import { Stock, KLineData, OrderBook, TimePeriod, Telegraph, MarketIndex } from './types';
-import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, TrendingUp, BarChart3 } from 'lucide-react';
+import {
+  AppScreenMode,
+  Stock,
+  KLineData,
+  OrderBook,
+  TimePeriod,
+  Telegraph,
+  MarketIndex,
+  ScreeningHistoryItem,
+  ScreeningQueryResponse,
+  ScreeningResultMode,
+  ScreeningResultPreset,
+  ScreeningRunResult,
+} from './types';
+import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, TrendingUp, BarChart3, Sparkles } from 'lucide-react';
 import logo from './assets/images/logo.png';
 import { GetTelegraphList, OpenURL, WindowMinimize, WindowMaximize, WindowClose } from '../wailsjs/go/main/App';
 import { WindowIsMaximised, WindowSetSize, WindowGetSize } from '../wailsjs/runtime/runtime';
@@ -64,6 +80,15 @@ const App: React.FC = () => {
   const [showLongHuBang, setShowLongHuBang] = useState(false);
   const [marketIndices, setMarketIndices] = useState<MarketIndex[]>([]);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [screenMode, setScreenMode] = useState<AppScreenMode>('watchlist');
+  const [screeningPrompt, setScreeningPrompt] = useState('');
+  const [screeningPreset, setScreeningPreset] = useState<ScreeningResultPreset>('50');
+  const [screeningResults, setScreeningResults] = useState<ScreeningRunResult[]>([]);
+  const [screeningHistory, setScreeningHistory] = useState<ScreeningHistoryItem[]>([]);
+  const [screeningRunId, setScreeningRunId] = useState<number | null>(null);
+  const [screeningTotalCount, setScreeningTotalCount] = useState(0);
+  const [screeningLoading, setScreeningLoading] = useState(false);
+  const [screeningError, setScreeningError] = useState('');
   const klineRequestIdRef = useRef(0);
 
   // 使用纯前端市场状态判断
@@ -75,9 +100,25 @@ const App: React.FC = () => {
   const [bottomPanelHeight, setBottomPanelHeight] = useState(LAYOUT_DEFAULTS.bottomPanelHeight);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const selectedStock = useMemo(() =>
-    watchlist.find(s => s.symbol === selectedSymbol) || watchlist[0]
-  , [selectedSymbol, watchlist]);
+  const screeningStocks = useMemo(
+    () => screeningResults.map(mapScreeningResultToStock),
+    [screeningResults],
+  );
+
+  const stockLookup = useMemo(() => {
+    const entries = [...watchlist, ...screeningStocks].map((stock) => [stock.symbol, stock] as const);
+    return new Map(entries);
+  }, [watchlist, screeningStocks]);
+
+  const selectedStock = useMemo(() => {
+    if (selectedSymbol) {
+      const matched = stockLookup.get(selectedSymbol);
+      if (matched) return matched;
+    }
+    return watchlist[0] ?? screeningStocks[0];
+  }, [selectedSymbol, stockLookup, watchlist, screeningStocks]);
+
+  const watchlistSymbols = useMemo(() => new Set(watchlist.map(stock => stock.symbol)), [watchlist]);
 
   // 处理股票数据更新（来自后端推送）
   const handleStockUpdate = useCallback((stocks: Stock[]) => {
@@ -303,7 +344,7 @@ const App: React.FC = () => {
     setSelectedSymbol(symbol);
     // 订阅该股票的盘口推送
     subscribeOrderBook(symbol);
-    const stock = watchlist.find(s => s.symbol === symbol);
+    const stock = stockLookup.get(symbol);
     if (stock) {
       // 并行加载 Session 和盘口数据
       const [session, orderBookData] = await Promise.all([
@@ -314,6 +355,70 @@ const App: React.FC = () => {
       setOrderBook(orderBookData);
     }
   };
+
+  const applyScreeningResponse = useCallback((response: ScreeningQueryResponse) => {
+    setScreeningResults(response.results ?? []);
+    setScreeningRunId(response.runId ?? null);
+    setScreeningTotalCount(response.totalCount ?? 0);
+    setScreeningError('');
+    if (response.prompt) {
+      setScreeningPrompt(response.prompt);
+    }
+    if (response.results && response.results.length > 0) {
+      void handleSelectStock(response.results[0].symbol);
+    }
+  }, [handleSelectStock]);
+
+  const refreshScreeningHistory = useCallback(async () => {
+    try {
+      const items = await listScreeningHistory(20);
+      setScreeningHistory(items);
+      if (watchlist.length === 0 && items.length > 0) {
+        setScreenMode('screening');
+      }
+    } catch (error) {
+      console.error('Failed to load screening history:', error);
+    }
+  }, [watchlist.length]);
+
+  const handleRunScreening = useCallback(async () => {
+    if (!screeningPrompt.trim()) return;
+
+    setScreenMode('screening');
+    setScreeningLoading(true);
+    setScreeningError('');
+    try {
+      const resultLimit = screeningPreset === 'unlimited' ? 0 : Number(screeningPreset);
+      const resultMode: ScreeningResultMode = screeningPreset === 'unlimited' ? 'unlimited' : 'top_n';
+      const response = await runScreeningQuery({
+        prompt: screeningPrompt.trim(),
+        resultMode,
+        resultLimit,
+        page: 1,
+        pageSize: screeningPreset === 'unlimited' ? 200 : resultLimit,
+      });
+      applyScreeningResponse(response);
+      await refreshScreeningHistory();
+    } catch (error) {
+      setScreeningError(error instanceof Error ? error.message : 'AI 筛选失败');
+    } finally {
+      setScreeningLoading(false);
+    }
+  }, [applyScreeningResponse, refreshScreeningHistory, screeningPreset, screeningPrompt]);
+
+  const handleSelectScreeningHistory = useCallback(async (runId: number) => {
+    setScreenMode('screening');
+    setScreeningLoading(true);
+    setScreeningError('');
+    try {
+      const response = await getScreeningHistoryRun(runId, 1, 200);
+      applyScreeningResponse(response);
+    } catch (error) {
+      setScreeningError(error instanceof Error ? error.message : '加载历史筛选失败');
+    } finally {
+      setScreeningLoading(false);
+    }
+  }, [applyScreeningResponse]);
 
   // Load watchlist on mount
   useEffect(() => {
@@ -331,8 +436,15 @@ const App: React.FC = () => {
           }
         }
 
-        const list = await getWatchlist();
+        const [list, history] = await Promise.all([
+          getWatchlist(),
+          listScreeningHistory(20).catch(() => []),
+        ]);
         setWatchlist(list);
+        setScreeningHistory(history);
+        if (list.length === 0 && history.length > 0) {
+          setScreenMode('screening');
+        }
         if (list.length > 0) {
           setSelectedSymbol(list[0].symbol);
           // 订阅第一个股票的盘口推送
@@ -403,7 +515,7 @@ const App: React.FC = () => {
   if (loading) return <div className="h-screen w-screen flex items-center justify-center fin-app text-white">加载中...</div>;
 
   // 没有自选股时显示欢迎页面
-  if (watchlist.length === 0) {
+  if (watchlist.length === 0 && screeningHistory.length === 0 && screeningResults.length === 0) {
     return (
       <>
         <WelcomePage onAddStock={handleAddStock} onOpenSettings={() => setShowSettings(true)} />
@@ -411,8 +523,6 @@ const App: React.FC = () => {
       </>
     );
   }
-
-  if (!selectedStock) return <div className="h-screen w-screen flex items-center justify-center fin-app text-white">请添加自选股</div>;
 
   return (
     <div className="flex flex-col h-screen text-slate-100 font-sans fin-app">
@@ -430,6 +540,29 @@ const App: React.FC = () => {
         <div className="flex items-center gap-2" style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}>
           <img src={logo} alt="logo" className="h-8 w-8 rounded-lg" />
           <span className={`font-bold text-lg tracking-tight ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>散牛盘 <span className="text-accent-2">AI</span></span>
+          <div className={`ml-4 inline-flex rounded-full border p-1 ${colors.isDark ? 'border-slate-700 bg-slate-900/50' : 'border-slate-300 bg-white/70'}`}>
+            <button
+              onClick={() => setScreenMode('watchlist')}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+                screenMode === 'watchlist'
+                  ? 'bg-accent text-white shadow-sm'
+                  : `${colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'}`
+              }`}
+            >
+              自选
+            </button>
+            <button
+              onClick={() => setScreenMode('screening')}
+              className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+                screenMode === 'screening'
+                  ? 'bg-accent text-white shadow-sm'
+                  : `${colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'}`
+              }`}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              AI 筛选
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-4 fin-panel-soft px-4 py-1.5 rounded-full border fin-divider relative" style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}>
@@ -540,14 +673,44 @@ const App: React.FC = () => {
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar: Watchlist */}
         <div style={{ width: leftPanelWidth }} className="shrink-0 fin-panel overflow-hidden">
-          <StockList
-            stocks={watchlist}
-            selectedSymbol={selectedSymbol}
-            onSelect={handleSelectStock}
-            onAddStock={handleAddStock}
-            onRemoveStock={handleRemoveStock}
-            marketIndices={marketIndices}
-          />
+          {screenMode === 'watchlist' ? (
+            <StockList
+              stocks={watchlist}
+              selectedSymbol={selectedSymbol}
+              onSelect={handleSelectStock}
+              onAddStock={handleAddStock}
+              onRemoveStock={handleRemoveStock}
+              marketIndices={marketIndices}
+            />
+          ) : (
+            <div className="flex h-full flex-col">
+              <div className="min-h-0 basis-[56%] border-b fin-divider-soft">
+                <ScreeningResultList
+                  results={screeningResults}
+                  selectedSymbol={selectedSymbol}
+                  totalCount={screeningTotalCount}
+                  isLoading={screeningLoading}
+                  error={screeningError}
+                  watchlistSymbols={watchlistSymbols}
+                  onSelect={(symbol) => { void handleSelectStock(symbol); }}
+                  onAddToWatchlist={handleAddStock}
+                />
+              </div>
+              <div className="min-h-0 flex-1">
+                <ScreeningWorkspace
+                  prompt={screeningPrompt}
+                  resultPreset={screeningPreset}
+                  loading={screeningLoading}
+                  history={screeningHistory}
+                  selectedRunId={screeningRunId}
+                  onPromptChange={setScreeningPrompt}
+                  onResultPresetChange={(value) => setScreeningPreset(value as ScreeningResultPreset)}
+                  onRun={() => { void handleRunScreening(); }}
+                  onSelectHistory={(runId) => { void handleSelectScreeningHistory(runId); }}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Left Resize Handle */}
@@ -555,6 +718,12 @@ const App: React.FC = () => {
 
         {/* Center Panel: Charts & Data */}
         <div className="flex-1 flex flex-col min-w-0 fin-panel-center">
+          {!selectedStock ? (
+            <div className={`flex h-full items-center justify-center text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+              从左侧自选或 AI 筛选结果中选择一只股票查看详情。
+            </div>
+          ) : (
+            <>
           {/* Stock Header - A股风格 */}
           <div className="px-6 py-3 shrink-0 border-b fin-divider-soft">
             <div className="flex items-center justify-between mb-2">
@@ -638,6 +807,8 @@ const App: React.FC = () => {
                </div>
             </div>
           </div>
+            </>
+          )}
         </div>
 
         {/* Right Resize Handle */}
@@ -645,29 +816,37 @@ const App: React.FC = () => {
 
         {/* Right Panel: AI Agents */}
         <div style={{ width: rightPanelWidth }} className="shrink-0 fin-panel overflow-hidden">
-          <AgentRoom
-            stock={selectedStock}
-            kLineData={kLineData}
-            session={currentSession}
-            onSessionUpdate={setCurrentSession}
-          />
+          {selectedStock ? (
+            <AgentRoom
+              stock={selectedStock}
+              kLineData={kLineData}
+              session={currentSession}
+              onSessionUpdate={setCurrentSession}
+            />
+          ) : (
+            <div className={`flex h-full items-center justify-center px-6 text-center text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+              选择股票后，这里会继续复用现有 AI 分析工作区。
+            </div>
+          )}
         </div>
       </div>
 
       <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} />
-      <PositionDialog
-        isOpen={showPosition}
-        onClose={() => setShowPosition(false)}
-        stockCode={selectedStock.symbol}
-        stockName={selectedStock.name}
-        currentPrice={selectedStock.price}
-        position={currentSession?.position}
-        onSave={async (shares, costPrice) => {
-          await updateStockPosition(selectedStock.symbol, shares, costPrice);
-          const session = await getOrCreateSession(selectedStock.symbol, selectedStock.name);
-          setCurrentSession(session);
-        }}
-      />
+      {selectedStock && (
+        <PositionDialog
+          isOpen={showPosition}
+          onClose={() => setShowPosition(false)}
+          stockCode={selectedStock.symbol}
+          stockName={selectedStock.name}
+          currentPrice={selectedStock.price}
+          position={currentSession?.position}
+          onSave={async (shares, costPrice) => {
+            await updateStockPosition(selectedStock.symbol, shares, costPrice);
+            const session = await getOrCreateSession(selectedStock.symbol, selectedStock.name);
+            setCurrentSession(session);
+          }}
+        />
+      )}
       <HotTrendDialog isOpen={showHotTrend} onClose={() => setShowHotTrend(false)} />
       <LongHuBangDialog isOpen={showLongHuBang} onClose={() => setShowLongHuBang(false)} />
     </div>
@@ -714,5 +893,21 @@ const formatAmount = (amount: number): string => {
   if (amount >= 10000) return (amount / 10000).toFixed(2) + '万';
   return amount.toFixed(2);
 };
+
+const mapScreeningResultToStock = (result: ScreeningRunResult): Stock => ({
+  symbol: result.symbol,
+  name: result.name,
+  price: result.price,
+  change: 0,
+  changePercent: result.changePercent,
+  volume: result.volume,
+  amount: result.amount,
+  marketCap: '',
+  sector: '',
+  open: result.price,
+  high: result.price,
+  low: result.price,
+  preClose: result.changePercent !== -100 ? result.price / (1 + result.changePercent / 100) : result.price,
+});
 
 export default App;
