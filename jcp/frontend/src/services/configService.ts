@@ -1,6 +1,7 @@
 // 配置服务 - 调用后端API
-import { GetConfig, UpdateConfig, GetAvailableTools, TestAIConnection } from '@wailsjs/go/main/App';
+import { GetConfig, UpdateConfig, GetAvailableTools, TestAIConnection, GetScreeningSyncStatus, RunScreeningSync } from '@wailsjs/go/main/App';
 import type { models } from '@wailsjs/go/models';
+import type { ScreeningSyncStatus } from '../types';
 
 export type AppConfig = models.AppConfig;
 
@@ -26,4 +27,12 @@ export const getAvailableTools = async (): Promise<ToolInfo[]> => {
 // 测试 AI 配置连通性
 export const testAIConnection = async (config: models.AIConfig): Promise<string> => {
   return await TestAIConnection(config);
+};
+
+export const getScreeningSyncStatus = async (): Promise<ScreeningSyncStatus> => {
+  return await GetScreeningSyncStatus() as ScreeningSyncStatus;
+};
+
+export const runScreeningSync = async (): Promise<ScreeningSyncStatus> => {
+  return await RunScreeningSync() as ScreeningSyncStatus;
 };

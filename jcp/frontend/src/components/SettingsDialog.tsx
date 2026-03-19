@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { X, Cpu, ChevronLeft, Plug, Plus, Trash2, Wrench, Check, Loader2, Brain, RefreshCw, Download, RotateCcw, Globe, Layers, Sliders, Star, MessageSquare, Copy, Sparkles } from 'lucide-react';
-import { getConfig, updateConfig, getAvailableTools, ToolInfo, testAIConnection } from '../services/configService';
+import { getConfig, updateConfig, getAvailableTools, ToolInfo, testAIConnection, getScreeningSyncStatus, runScreeningSync } from '../services/configService';
 import { getAgentConfigs } from '../services/strategyService';
 import { getMCPServers, MCPServerConfig, MCPServerStatus, testMCPConnection, getMCPServerTools, MCPToolInfo } from '../services/mcpService';
 import { checkForUpdate, doUpdate, restartApp, getCurrentVersion, onUpdateProgress, UpdateInfo, UpdateProgress } from '../services/updateService';
@@ -8,6 +8,7 @@ import { getStrategies, getActiveStrategyID, setActiveStrategy, deleteStrategy, 
 import { useTheme } from '../contexts/ThemeContext';
 import { useCandleColor, CandleColorMode } from '../contexts/CandleColorContext';
 import { useIndicator, IndicatorConfig, IndicatorType, DEFAULT_INDICATORS } from '../contexts/IndicatorContext';
+import type { ScreeningConfig, ScreeningSyncStatus } from '../types';
 
 interface AIConfig {
   id: string;
@@ -53,7 +54,7 @@ interface OpenClawConfig {
   apiKey: string;
 }
 
-type TabType = 'provider' | 'intent' | 'strategy' | 'mcp' | 'memory' | 'chart' | 'proxy' | 'openclaw' | 'update';
+type TabType = 'provider' | 'intent' | 'strategy' | 'mcp' | 'memory' | 'screening' | 'chart' | 'proxy' | 'openclaw' | 'update';
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -109,6 +110,22 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     port: 51888,
     apiKey: '',
   });
+  const [screeningConfig, setScreeningConfig] = useState<ScreeningConfig>({
+    markets: {
+      shanghai: true,
+      shenzhen: true,
+      beijing: false,
+      indices: false,
+    },
+    initialSyncDays: 30,
+    retentionMode: 'forever',
+    retentionDays: 60,
+    autoSyncEnabled: false,
+    autoSyncTime: '18:00',
+    defaultResultLimit: 100,
+  });
+  const [screeningSyncStatus, setScreeningSyncStatus] = useState<ScreeningSyncStatus | null>(null);
+  const [screeningSyncing, setScreeningSyncing] = useState(false);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [activeStrategyId, setActiveStrategyId] = useState<string>('');
   const [moderatorAiId, setModeratorAiId] = useState<string>('');
@@ -142,6 +159,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
         apiKey: config.openClaw.apiKey || '',
       });
     }
+    if (config.screening) {
+      setScreeningConfig(config.screening as ScreeningConfig);
+    }
     if (config.moderatorAiId) setModeratorAiId(config.moderatorAiId);
     if (config.strategyAiId) setStrategyAiId(config.strategyAiId);
 
@@ -150,6 +170,13 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     setStrategies(loadedStrategies || []);
     const activeId = await getActiveStrategyID();
     setActiveStrategyId(activeId);
+
+    try {
+      const status = await getScreeningSyncStatus();
+      setScreeningSyncStatus(status);
+    } catch {
+      setScreeningSyncStatus(null);
+    }
 
     // 自动检测已启用的 MCP 服务器状态
     const enabledMcps = (mcps || []).filter(m => m.enabled);
@@ -172,6 +199,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     mcpServers: MCPServerConfig[];
     memory: MemoryConfig;
     proxy: ProxyConfig;
+    screening: ScreeningConfig;
+    openClaw: OpenClawConfig;
     moderatorAiId: string;
     strategyAiId: string;
     indicators: any;
@@ -206,6 +235,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     memory: MemoryConfig;
     proxy: ProxyConfig;
     openClaw: OpenClawConfig;
+    screening: ScreeningConfig;
     moderatorAiId: string;
     strategyAiId: string;
     candleColorMode: string;
@@ -244,6 +274,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     { id: 'strategy', label: '策略管理', icon: <Layers className="h-4 w-4" /> },
     { id: 'mcp', label: 'MCP服务', icon: <Plug className="h-4 w-4" /> },
     { id: 'memory', label: '记忆管理', icon: <Brain className="h-4 w-4" /> },
+    { id: 'screening', label: 'AI筛选', icon: <Sparkles className="h-4 w-4" /> },
     { id: 'chart', label: '图表设置', icon: <Sliders className="h-4 w-4" /> },
     { id: 'proxy', label: '网络代理', icon: <Globe className="h-4 w-4" /> },
     { id: 'openclaw', label: 'OpenClaw', icon: <Plug className="h-4 w-4" /> },
@@ -345,6 +376,36 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                 onChange={(config) => {
                   setMemoryConfig(config);
                   saveConfig({ memory: config });
+                }}
+              />
+            )}
+            {activeTab === 'screening' && (
+              <ScreeningSettings
+                config={screeningConfig}
+                syncStatus={screeningSyncStatus}
+                syncing={screeningSyncing}
+                onChange={(config) => {
+                  setScreeningConfig(config);
+                  saveConfig({ screening: config });
+                }}
+                onRunSync={async () => {
+                  setScreeningSyncing(true);
+                  showToast('loading', '正在同步筛选数据库...');
+                  try {
+                    const status = await runScreeningSync();
+                    setScreeningSyncStatus(status);
+                    hideToast();
+                    if (status.error) {
+                      showToast('error', status.error);
+                    } else {
+                      showToast('success', '筛选数据库同步完成');
+                    }
+                  } catch (error) {
+                    hideToast();
+                    showToast('error', error instanceof Error ? error.message : '同步失败');
+                  } finally {
+                    setScreeningSyncing(false);
+                  }
                 }}
               />
             )}
@@ -1182,6 +1243,224 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({ config, aiConfigs, onCh
         </div>
       )}
     </div>
+  );
+};
+
+// ========== AI筛选设置选项卡 ==========
+interface ScreeningSettingsProps {
+  config: ScreeningConfig;
+  syncStatus: ScreeningSyncStatus | null;
+  syncing: boolean;
+  onChange: (config: ScreeningConfig) => void;
+  onRunSync: () => Promise<void>;
+}
+
+const ScreeningSettings: React.FC<ScreeningSettingsProps> = ({
+  config,
+  syncStatus,
+  syncing,
+  onChange,
+  onRunSync,
+}) => {
+  const { colors } = useTheme();
+
+  const updateMarkets = (field: keyof ScreeningConfig['markets'], value: boolean) => {
+    onChange({
+      ...config,
+      markets: {
+        ...config.markets,
+        [field]: value,
+      },
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className={`font-medium ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>AI 筛选同步设置</h3>
+        <p className={`text-sm mt-1 ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+          配置本地 SQLite 筛选库的市场范围、同步窗口、保留策略和应用运行期自动同步。
+        </p>
+      </div>
+
+      <section className={`rounded-xl border p-4 ${colors.isDark ? 'border-slate-700 bg-slate-900/30' : 'border-slate-200 bg-slate-50/80'}`}>
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <div className={`text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>手动同步</div>
+            <div className={`text-xs mt-1 ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+              首次按设置窗口拉取，之后按交易日增量补齐。
+            </div>
+          </div>
+          <button
+            onClick={() => { void onRunSync(); }}
+            disabled={syncing}
+            className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] px-4 py-2 text-sm text-white disabled:opacity-50"
+          >
+            {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {syncing ? '同步中...' : '立即同步'}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <InfoCard label="最近交易日" value={syncStatus?.lastTradeDate || '未同步'} />
+          <InfoCard label="最近同步时间" value={syncStatus?.lastSyncedAt || '未同步'} />
+          <InfoCard label="本次股票数" value={syncStatus ? String(syncStatus.stocksSynced) : '--'} />
+          <InfoCard label="本次日线数" value={syncStatus ? String(syncStatus.barsSynced) : '--'} />
+        </div>
+        {syncStatus?.error && (
+          <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+            {syncStatus.error}
+          </div>
+        )}
+      </section>
+
+      <section className={`rounded-xl border p-4 ${colors.isDark ? 'border-slate-700 bg-slate-900/30' : 'border-slate-200 bg-slate-50/80'}`}>
+        <div className={`mb-3 text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>市场范围</div>
+        <div className="grid grid-cols-2 gap-3">
+          <CheckboxCard
+            checked={config.markets.shanghai}
+            label="沪市"
+            description="默认启用，纳入上证 A 股。"
+            onChange={(checked) => updateMarkets('shanghai', checked)}
+          />
+          <CheckboxCard
+            checked={config.markets.shenzhen}
+            label="深市"
+            description="默认启用，纳入深证 A 股。"
+            onChange={(checked) => updateMarkets('shenzhen', checked)}
+          />
+          <CheckboxCard
+            checked={config.markets.beijing}
+            label="北交所"
+            description="可选启用，补充北交所股票。"
+            onChange={(checked) => updateMarkets('beijing', checked)}
+          />
+          <CheckboxCard
+            checked={config.markets.indices}
+            label="指数"
+            description="可选启用，上证指数/深证成指/创业板指。"
+            onChange={(checked) => updateMarkets('indices', checked)}
+          />
+        </div>
+      </section>
+
+      <section className={`rounded-xl border p-4 ${colors.isDark ? 'border-slate-700 bg-slate-900/30' : 'border-slate-200 bg-slate-50/80'}`}>
+        <div className={`mb-4 text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>同步与保留</div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={`mb-1 block text-sm ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>首次同步范围</label>
+            <select
+              value={String(config.initialSyncDays)}
+              onChange={(e) => onChange({ ...config, initialSyncDays: Number(e.target.value) })}
+              className={`w-full fin-input rounded-lg px-3 py-2 text-sm ${colors.isDark ? 'text-white' : 'text-slate-800'}`}
+            >
+              <option value="30">最近 30 天</option>
+              <option value="60">最近 60 天</option>
+              <option value="90">最近 90 天</option>
+              <option value="120">最近 120 天</option>
+            </select>
+          </div>
+          <div>
+            <label className={`mb-1 block text-sm ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>AI 默认结果条数</label>
+            <select
+              value={String(config.defaultResultLimit)}
+              onChange={(e) => onChange({ ...config, defaultResultLimit: Number(e.target.value) })}
+              className={`w-full fin-input rounded-lg px-3 py-2 text-sm ${colors.isDark ? 'text-white' : 'text-slate-800'}`}
+            >
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+            </select>
+          </div>
+          <div>
+            <label className={`mb-1 block text-sm ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>保留策略</label>
+            <select
+              value={config.retentionMode === 'forever' ? 'forever' : String(config.retentionDays)}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (value === 'forever') {
+                  onChange({ ...config, retentionMode: 'forever', retentionDays: 60 });
+                } else {
+                  onChange({ ...config, retentionMode: 'days', retentionDays: Number(value) });
+                }
+              }}
+              className={`w-full fin-input rounded-lg px-3 py-2 text-sm ${colors.isDark ? 'text-white' : 'text-slate-800'}`}
+            >
+              <option value="forever">永久保留</option>
+              <option value="30">仅保留近 30 天</option>
+              <option value="60">仅保留近 60 天</option>
+            </select>
+          </div>
+          <div>
+            <label className={`mb-1 block text-sm ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>自动同步时间</label>
+            <input
+              type="time"
+              value={config.autoSyncTime}
+              onChange={(e) => onChange({ ...config, autoSyncTime: e.target.value })}
+              className={`w-full fin-input rounded-lg px-3 py-2 text-sm ${colors.isDark ? 'text-white' : 'text-slate-800'}`}
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className={`rounded-xl border p-4 ${colors.isDark ? 'border-slate-700 bg-slate-900/30' : 'border-slate-200 bg-slate-50/80'}`}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className={`text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>应用运行时自动同步</div>
+            <div className={`text-xs mt-1 ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+              仅在应用运行期间生效，到达设定时间后自动执行增量同步。
+            </div>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={config.autoSyncEnabled}
+              onChange={(e) => onChange({ ...config, autoSyncEnabled: e.target.checked })}
+              className="sr-only peer"
+            />
+            <div className={`w-11 h-6 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent ${colors.isDark ? 'bg-slate-700' : 'bg-slate-400'}`}></div>
+          </label>
+        </div>
+      </section>
+    </div>
+  );
+};
+
+const InfoCard: React.FC<{ label: string; value: string }> = ({ label, value }) => {
+  const { colors } = useTheme();
+  return (
+    <div className={`rounded-lg border p-3 ${colors.isDark ? 'border-slate-800 bg-slate-950/40' : 'border-slate-200 bg-white/80'}`}>
+      <div className={`text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>{label}</div>
+      <div className={`mt-1 text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>{value}</div>
+    </div>
+  );
+};
+
+const CheckboxCard: React.FC<{
+  checked: boolean;
+  label: string;
+  description: string;
+  onChange: (checked: boolean) => void;
+}> = ({ checked, label, description, onChange }) => {
+  const { colors } = useTheme();
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={`rounded-lg border px-3 py-3 text-left transition-colors ${
+        checked
+          ? 'border-accent/40 bg-accent/10'
+          : `${colors.isDark ? 'border-slate-700 bg-slate-950/30 hover:border-slate-600' : 'border-slate-200 bg-white/80 hover:border-slate-300'}`
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <span className={`text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>{label}</span>
+        <span className={`text-xs ${checked ? 'text-accent-2' : (colors.isDark ? 'text-slate-500' : 'text-slate-400')}`}>
+          {checked ? '已启用' : '未启用'}
+        </span>
+      </div>
+      <div className={`mt-2 text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>{description}</div>
+    </button>
   );
 };
 

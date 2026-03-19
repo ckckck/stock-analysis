@@ -195,3 +195,16 @@ export interface ScreeningHistoryResponse {
   items: ScreeningHistoryItem[];
   error?: string;
 }
+
+export interface ScreeningSyncStatus {
+  marketScope: string;
+  initialSyncDays: number;
+  retentionMode: string;
+  retentionDays: number;
+  lastTradeDate: string;
+  lastSyncedAt: string;
+  stocksSynced: number;
+  barsSynced: number;
+  snapshotsSynced: number;
+  error?: string;
+}
