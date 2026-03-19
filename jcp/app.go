@@ -26,24 +26,25 @@ var log = logger.New("app")
 
 // App struct
 type App struct {
-	ctx               context.Context
-	configService     *services.ConfigService
-	marketService     *services.MarketService
-	newsService       *services.NewsService
-	hotTrendService   *hottrend.HotTrendService
-	longHuBangService *services.LongHuBangService
-	marketPusher      *services.MarketDataPusher
-	screeningStore    *services.ScreeningStore
-	screeningSync     *services.ScreeningSyncService
-	meetingService    *meeting.Service
-	sessionService    *services.SessionService
-	strategyService   *services.StrategyService
-	agentContainer    *agent.Container
-	toolRegistry      *tools.Registry
-	mcpManager        *mcp.Manager
-	memoryManager     *memory.Manager
-	updateService     *services.UpdateService
-	openClawServer    *openclaw.Server
+	ctx                context.Context
+	configService      *services.ConfigService
+	marketService      *services.MarketService
+	newsService        *services.NewsService
+	hotTrendService    *hottrend.HotTrendService
+	longHuBangService  *services.LongHuBangService
+	marketPusher       *services.MarketDataPusher
+	screeningStore     *services.ScreeningStore
+	screeningSync      *services.ScreeningSyncService
+	screeningScheduler *services.ScreeningScheduler
+	meetingService     *meeting.Service
+	sessionService     *services.SessionService
+	strategyService    *services.StrategyService
+	agentContainer     *agent.Container
+	toolRegistry       *tools.Registry
+	mcpManager         *mcp.Manager
+	memoryManager      *memory.Manager
+	updateService      *services.UpdateService
+	openClawServer     *openclaw.Server
 
 	// 会议取消管理
 	meetingCancels   map[string]context.CancelFunc
@@ -80,11 +81,13 @@ func NewApp() *App {
 
 	var screeningStore *services.ScreeningStore
 	var screeningSync *services.ScreeningSyncService
+	var screeningScheduler *services.ScreeningScheduler
 	screeningStore, err = services.NewScreeningStore()
 	if err != nil {
 		log.Warn("screening store init error: %v", err)
 	} else {
 		screeningSync = services.NewScreeningSyncService(configService, screeningStore, marketService)
+		screeningScheduler = services.NewScreeningScheduler(configService, screeningSync)
 	}
 
 	// 初始化龙虎榜服务
@@ -176,23 +179,24 @@ func NewApp() *App {
 	log.Info("所有服务初始化完成")
 
 	return &App{
-		configService:     configService,
-		marketService:     marketService,
-		newsService:       newsService,
-		screeningStore:    screeningStore,
-		screeningSync:     screeningSync,
-		hotTrendService:   hotTrendSvc,
-		longHuBangService: longHuBangService,
-		meetingService:    meetingService,
-		sessionService:    sessionService,
-		strategyService:   strategyService,
-		agentContainer:    agentContainer,
-		toolRegistry:      toolRegistry,
-		mcpManager:        mcpManager,
-		memoryManager:     memoryManager,
-		updateService:     updateService,
-		openClawServer:    openClawServer,
-		meetingCancels:    make(map[string]context.CancelFunc),
+		configService:      configService,
+		marketService:      marketService,
+		newsService:        newsService,
+		screeningStore:     screeningStore,
+		screeningSync:      screeningSync,
+		screeningScheduler: screeningScheduler,
+		hotTrendService:    hotTrendSvc,
+		longHuBangService:  longHuBangService,
+		meetingService:     meetingService,
+		sessionService:     sessionService,
+		strategyService:    strategyService,
+		agentContainer:     agentContainer,
+		toolRegistry:       toolRegistry,
+		mcpManager:         mcpManager,
+		memoryManager:      memoryManager,
+		updateService:      updateService,
+		openClawServer:     openClawServer,
+		meetingCancels:     make(map[string]context.CancelFunc),
 	}
 }
 
@@ -226,6 +230,10 @@ func (a *App) startup(ctx context.Context) {
 	a.marketPusher.Start(ctx)
 	log.Info("市场数据推送服务已启动")
 
+	if a.screeningScheduler != nil {
+		a.screeningScheduler.Start(ctx)
+	}
+
 	// 启动 OpenClaw 服务（如果已启用）
 	cfg := a.configService.GetConfig()
 	if cfg.OpenClaw.Enabled && cfg.OpenClaw.Port > 0 {
@@ -243,6 +251,9 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	if a.marketPusher != nil {
 		a.marketPusher.Stop()
+	}
+	if a.screeningScheduler != nil {
+		a.screeningScheduler.Stop()
 	}
 	if a.screeningStore != nil {
 		_ = a.screeningStore.Close()
@@ -293,6 +304,9 @@ func (a *App) UpdateConfig(config *models.AppConfig) string {
 	}
 	// 更新 OpenClaw 服务配置（热更新）
 	a.applyOpenClawConfig(&config.OpenClaw)
+	if a.screeningScheduler != nil && a.ctx != nil {
+		a.screeningScheduler.Refresh(a.ctx)
+	}
 	return "success"
 }
 
