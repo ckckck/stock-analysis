@@ -75,6 +75,7 @@ func (cs *ConfigService) loadConfig() error {
 			AutoSyncEnabled    *bool                          `json:"autoSyncEnabled"`
 			AutoSyncTime       *string                        `json:"autoSyncTime"`
 			DefaultResultLimit *int                           `json:"defaultResultLimit"`
+			SQLTimeoutSeconds  *int                           `json:"sqlTimeoutSeconds"`
 		} `json:"screening"`
 		Indicators struct {
 			MA struct {
@@ -198,6 +199,7 @@ func (cs *ConfigService) defaultConfig() *models.AppConfig {
 			AutoSyncEnabled:    false,
 			AutoSyncTime:       "18:00",
 			DefaultResultLimit: 100,
+			SQLTimeoutSeconds:  0,
 		},
 	}
 }
@@ -217,6 +219,7 @@ func applyScreeningDefaults(
 		AutoSyncEnabled    *bool                          `json:"autoSyncEnabled"`
 		AutoSyncTime       *string                        `json:"autoSyncTime"`
 		DefaultResultLimit *int                           `json:"defaultResultLimit"`
+		SQLTimeoutSeconds  *int                           `json:"sqlTimeoutSeconds"`
 	},
 	defaults models.ScreeningConfig,
 ) {
@@ -259,6 +262,9 @@ func applyScreeningDefaults(
 	}
 	if raw.DefaultResultLimit == nil || screening.DefaultResultLimit == 0 {
 		screening.DefaultResultLimit = defaults.DefaultResultLimit
+	}
+	if raw.SQLTimeoutSeconds == nil || screening.SQLTimeoutSeconds <= 0 {
+		screening.SQLTimeoutSeconds = defaults.SQLTimeoutSeconds
 	}
 }
 

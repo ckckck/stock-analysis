@@ -138,11 +138,14 @@ export interface ScreeningConfig {
   autoSyncEnabled: boolean;
   autoSyncTime: string;
   defaultResultLimit: number;
+  sqlTimeoutSeconds: number;
 }
 
-export type AppScreenMode = 'watchlist' | 'screening';
+export type AppScreenMode = 'home' | 'watchlist' | 'screening';
 export type ScreeningResultMode = 'unlimited' | 'top_n';
 export type ScreeningResultPreset = '50' | '100' | '200' | 'unlimited';
+export type ScreeningResultTab = 'current' | 'history';
+export type ScreeningRunSource = 'ai' | 'history_sql';
 
 export interface ScreeningRunResult {
   runId: number;
@@ -164,6 +167,7 @@ export interface ScreeningQueryRequest {
   resultLimit: number;
   page: number;
   pageSize: number;
+  universeSymbols?: string[];
 }
 
 export interface ScreeningQueryResponse {
@@ -178,6 +182,25 @@ export interface ScreeningQueryResponse {
   pageSize: number;
   createdAt?: string;
   results: ScreeningRunResult[];
+  error?: string;
+}
+
+export interface ScreeningQueryLog {
+  time: string;
+  stage: string;
+  status: string;
+  message: string;
+}
+
+export interface ScreeningQueryProgress {
+  runStatus: string;
+  currentStage: string;
+  progressPercent: number;
+  message: string;
+  streamingText?: string;
+  prompt: string;
+  universeCount?: number;
+  logs: ScreeningQueryLog[];
   error?: string;
 }
 
@@ -203,8 +226,63 @@ export interface ScreeningSyncStatus {
   retentionDays: number;
   lastTradeDate: string;
   lastSyncedAt: string;
+  targetTradeDate?: string;
+  latestSyncedTradeDate?: string;
   stocksSynced: number;
   barsSynced: number;
   snapshotsSynced: number;
+  storedStocks?: number;
+  storedBars?: number;
+  storedSnapshots?: number;
+  marketStockCount?: number;
+  syncedToLatestStocks?: number;
+  pendingSyncStocks?: number;
+  runStatus?: string;
+  progressPercent?: number;
+  totalStocks?: number;
+  completedStocks?: number;
+  currentSymbol?: string;
+  currentName?: string;
+  currentStage?: string;
+  activeSource?: string;
+  lastMessage?: string;
+  limitStocks?: number;
+  resumeFromCheckpoint?: boolean;
+  syncedSymbols?: string[];
+  events?: ScreeningSyncEvent[];
+  error?: string;
+}
+
+export type ScreeningSyncRunMode = 'manual' | 'auto';
+
+export interface ScreeningSyncRunOptions {
+  mode: ScreeningSyncRunMode;
+  limitStocks: number;
+}
+
+export interface ScreeningSyncEvent {
+  time: string;
+  symbol: string;
+  name: string;
+  source: string;
+  status: string;
+  message: string;
+}
+
+export interface ScreeningSyncProgress {
+  marketScope: string;
+  mode: string;
+  runStatus: string;
+  progressPercent: number;
+  totalStocks: number;
+  completedStocks: number;
+  currentSymbol: string;
+  currentName: string;
+  currentStage: string;
+  activeSource: string;
+  lastMessage: string;
+  limitStocks: number;
+  resumeFromCheckpoint: boolean;
+  events: ScreeningSyncEvent[];
   error?: string;
 }

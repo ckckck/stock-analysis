@@ -146,6 +146,7 @@ type ScreeningConfig struct {
 	AutoSyncEnabled    bool                       `json:"autoSyncEnabled"`
 	AutoSyncTime       string                     `json:"autoSyncTime"`
 	DefaultResultLimit int                        `json:"defaultResultLimit"`
+	SQLTimeoutSeconds  int                        `json:"sqlTimeoutSeconds"`
 }
 
 type MAConfig struct {

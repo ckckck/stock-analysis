@@ -17,10 +17,23 @@ import { ResizeHandle } from './components/ResizeHandle';
 import { getWatchlist, addToWatchlist, removeFromWatchlist } from './services/watchlistService';
 import { getKLineData, getOrderBook } from './services/stockService';
 import { getOrCreateSession, StockSession, updateStockPosition } from './services/sessionService';
-import { getConfig, updateConfig } from './services/configService';
-import { getScreeningHistoryRun, listScreeningHistory, runScreeningQuery } from './services/screeningService';
+import { cancelScreeningSync, getConfig, getScreeningSyncStatus, getScreeningUniverseSymbols, onScreeningSyncProgress, runScreeningSync, updateConfig, type AppConfig as FrontendAppConfig } from './services/configService';
+import { cancelScreeningQuery, getScreeningHistoryRun, listScreeningHistory, onScreeningQueryProgress, rerunScreeningHistoryRun, runScreeningQuery } from './services/screeningService';
 import { useMarketEvents } from './hooks/useMarketEvents';
 import { useMarketStatus } from './hooks/useMarketStatus';
+import { formatDateDisplay, formatDateTimeDisplay } from './utils/datetime';
+import {
+  createPendingScreeningSyncStatus,
+  formatScreeningSourceName,
+  formatScreeningSyncRunStatus,
+  mergeScreeningSyncProgress,
+  resolveScreeningSyncCoverageStats,
+  resolveSyncDialogCopy,
+  resolveTopbarSyncButtonState,
+  shouldContinueAfterScreeningSync,
+  type ScreeningSyncDialogMode,
+  type SyncButtonTone,
+} from './utils/screeningSync';
 import {
   AppScreenMode,
   Stock,
@@ -28,14 +41,19 @@ import {
   OrderBook,
   TimePeriod,
   Telegraph,
-  MarketIndex,
-  ScreeningHistoryItem,
-  ScreeningQueryResponse,
-  ScreeningResultMode,
-  ScreeningResultPreset,
-  ScreeningRunResult,
-} from './types';
-import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, TrendingUp, BarChart3, Sparkles } from 'lucide-react';
+    MarketIndex,
+    ScreeningConfig,
+    ScreeningHistoryItem,
+    ScreeningQueryResponse,
+    ScreeningQueryProgress,
+    ScreeningResultMode,
+    ScreeningResultPreset,
+    ScreeningResultTab,
+    ScreeningRunSource,
+    ScreeningRunResult,
+    ScreeningSyncStatus,
+  } from './types';
+import { Radio, Settings, List, Minus, Square, X, Copy, Briefcase, Sparkles, Loader2, AlertCircle, CheckCircle2, Clock3 } from 'lucide-react';
 import logo from './assets/images/logo.png';
 import { GetTelegraphList, OpenURL, WindowMinimize, WindowMaximize, WindowClose } from '../wailsjs/go/main/App';
 import { WindowIsMaximised, WindowSetSize, WindowGetSize } from '../wailsjs/runtime/runtime';
@@ -58,6 +76,13 @@ const LAYOUT_MAX = {
 };
 
 type KLineUpdateMode = 'full' | 'incremental' | 'refresh';
+
+const SCREENING_SYNC_TERMINAL_STATUSES = new Set(['completed', 'failed', 'canceled']);
+type SyncHealthTone = 'success' | 'warning' | 'danger';
+
+const isScreeningSyncTerminal = (runStatus?: string): boolean => (
+  Boolean(runStatus && SCREENING_SYNC_TERMINAL_STATUSES.has(runStatus))
+);
 
 const App: React.FC = () => {
   const { colors } = useTheme();
@@ -85,11 +110,33 @@ const App: React.FC = () => {
   const [screeningPreset, setScreeningPreset] = useState<ScreeningResultPreset>('50');
   const [screeningResults, setScreeningResults] = useState<ScreeningRunResult[]>([]);
   const [screeningHistory, setScreeningHistory] = useState<ScreeningHistoryItem[]>([]);
-  const [screeningRunId, setScreeningRunId] = useState<number | null>(null);
+  const [screeningResultTab, setScreeningResultTab] = useState<ScreeningResultTab>('current');
+  const [screeningSelectedHistoryRunId, setScreeningSelectedHistoryRunId] = useState<number | null>(null);
+  const [screeningRunSource, setScreeningRunSource] = useState<ScreeningRunSource>('ai');
+  const [screeningRerunBaseRunId, setScreeningRerunBaseRunId] = useState<number | null>(null);
+  const [screeningGeneratedSql, setScreeningGeneratedSql] = useState('');
+  const [screeningSqlViewerOpen, setScreeningSqlViewerOpen] = useState(false);
   const [screeningTotalCount, setScreeningTotalCount] = useState(0);
   const [screeningLoading, setScreeningLoading] = useState(false);
   const [screeningError, setScreeningError] = useState('');
+  const [screeningConfig, setScreeningConfig] = useState<ScreeningConfig | null>(null);
+  const [screeningSyncStatus, setScreeningSyncStatus] = useState<ScreeningSyncStatus | null>(null);
+  const [screeningConfirmVisible, setScreeningConfirmVisible] = useState(false);
+  const [screeningConfirmSyncStarted, setScreeningConfirmSyncStarted] = useState(false);
+  const [pendingScreeningPrompt, setPendingScreeningPrompt] = useState('');
+  const [welcomeSyncLoading, setWelcomeSyncLoading] = useState(false);
+  const [welcomeSyncError, setWelcomeSyncError] = useState('');
+  const [syncOnlyDialogVisible, setSyncOnlyDialogVisible] = useState(false);
+  const [syncOnlySyncStarted, setSyncOnlySyncStarted] = useState(false);
+  const [syncOnlyLoading, setSyncOnlyLoading] = useState(false);
+  const [syncOnlyError, setSyncOnlyError] = useState('');
+  const [welcomeSyncTestMode, setWelcomeSyncTestMode] = useState(false);
+  const [welcomeSyncTestLimit, setWelcomeSyncTestLimit] = useState(10);
+  const [screeningQueryProgress, setScreeningQueryProgress] = useState<ScreeningQueryProgress | null>(null);
+  const [screeningSQLTimeoutLabel, setScreeningSQLTimeoutLabel] = useState('不限');
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'provider' | 'screening'>('provider');
   const klineRequestIdRef = useRef(0);
+  const screeningCancelRequestedRef = useRef(false);
 
   // 使用纯前端市场状态判断
   const { status: marketStatus } = useMarketStatus();
@@ -110,15 +157,201 @@ const App: React.FC = () => {
     return new Map(entries);
   }, [watchlist, screeningStocks]);
 
+  const screeningStockLookup = useMemo(
+    () => new Map(screeningStocks.map((stock) => [stock.symbol, stock] as const)),
+    [screeningStocks],
+  );
+
   const selectedStock = useMemo(() => {
+    if (screenMode === 'screening') {
+      if (selectedSymbol) {
+        const matched = screeningStockLookup.get(selectedSymbol);
+        if (matched) return matched;
+      }
+      return screeningStocks[0];
+    }
     if (selectedSymbol) {
       const matched = stockLookup.get(selectedSymbol);
       if (matched) return matched;
     }
     return watchlist[0] ?? screeningStocks[0];
-  }, [selectedSymbol, stockLookup, watchlist, screeningStocks]);
+  }, [screenMode, screeningStockLookup, screeningStocks, selectedSymbol, stockLookup, watchlist]);
 
   const watchlistSymbols = useMemo(() => new Set(watchlist.map(stock => stock.symbol)), [watchlist]);
+
+  const screeningSummary = useMemo(() => {
+    const markets = screeningConfig?.markets;
+    const marketScopeLabel = [
+      markets?.shanghai ? '沪市' : null,
+      markets?.shenzhen ? '深市' : null,
+      markets?.beijing ? '北交所' : null,
+      markets?.indices ? '指数' : null,
+    ].filter(Boolean).join('、') || '未配置';
+
+    const initialSyncLabel = `最近 ${screeningConfig?.initialSyncDays ?? 30} 天`;
+    const retentionLabel = screeningConfig?.retentionMode === 'days'
+      ? `仅保留近 ${screeningConfig.retentionDays} 天`
+      : '永久保留';
+    const autoSyncLabel = screeningConfig?.autoSyncEnabled
+      ? `开启，${screeningConfig.autoSyncTime}`
+      : '未开启';
+    const targetTradeDateLabel = formatDateDisplay(screeningSyncStatus?.targetTradeDate, '未同步');
+    const latestSyncedTradeDateLabel = formatDateDisplay(screeningSyncStatus?.latestSyncedTradeDate, '未同步');
+    const lastSyncedAtLabel = formatDateTimeDisplay(screeningSyncStatus?.lastSyncedAt, '未同步');
+    const coverageStats = resolveScreeningSyncCoverageStats(screeningSyncStatus);
+    const syncedToLatestLabel = `${coverageStats.syncedToLatestStocks} 只`;
+    const pendingSyncLabel = `${coverageStats.pendingSyncStocks} 只`;
+    const marketStockCountLabel = `${coverageStats.marketStockCount} 只`;
+    const healthSummary = resolveScreeningSyncHealthSummary(screeningSyncStatus);
+
+    return {
+      strategyItems: [
+        { label: '市场范围', value: marketScopeLabel },
+        { label: '首次同步', value: initialSyncLabel },
+        { label: '保留策略', value: retentionLabel },
+        { label: '自动同步', value: autoSyncLabel },
+        { label: 'SQL 超时', value: screeningSQLTimeoutLabel },
+      ],
+      dataItems: [
+        { label: '最近交易日', value: targetTradeDateLabel },
+        { label: '最新已同步交易日', value: latestSyncedTradeDateLabel },
+        { label: '最近同步时间', value: lastSyncedAtLabel },
+        { label: '已同步到最新', value: syncedToLatestLabel, tone: 'success' as SyncHealthTone },
+        { label: '待同步', value: pendingSyncLabel, tone: healthSummary.tone === 'success' ? undefined : healthSummary.tone },
+        { label: '股票总数', value: marketStockCountLabel },
+      ],
+      healthSummary,
+    };
+  }, [screeningConfig, screeningSQLTimeoutLabel, screeningSyncStatus]);
+
+  const topbarSyncButtonState = useMemo(
+    () => resolveTopbarSyncButtonState(screeningSyncStatus),
+    [screeningSyncStatus],
+  );
+
+  const canReuseHistorySql = useMemo(
+    () => screeningRunSource === 'history_sql' && screeningRerunBaseRunId !== null,
+    [screeningRerunBaseRunId, screeningRunSource],
+  );
+
+  const refreshScreeningBootstrapState = useCallback(async () => {
+    try {
+      const [config, status] = await Promise.all([
+        getConfig(),
+        getScreeningSyncStatus().catch(() => null),
+      ]);
+      console.debug('[screening-sync] bootstrap refresh', {
+        runStatus: status?.runStatus,
+        completedStocks: status?.completedStocks,
+        totalStocks: status?.totalStocks,
+        syncedToLatestStocks: status?.syncedToLatestStocks,
+        marketStockCount: status?.marketStockCount,
+        currentStage: status?.currentStage,
+        lastMessage: status?.lastMessage,
+        error: status?.error,
+      });
+      setScreeningConfig((config.screening as ScreeningConfig) ?? null);
+      setScreeningSQLTimeoutLabel(resolveDefaultScreeningSQLTimeoutLabel(config));
+      setScreeningSyncStatus(status);
+    } catch (error) {
+      console.error('Failed to refresh screening bootstrap state:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onScreeningQueryProgress((progress) => {
+      if (screeningCancelRequestedRef.current) {
+        return;
+      }
+      setScreeningQueryProgress(progress);
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onScreeningSyncProgress((progress) => {
+      console.debug('[screening-sync] progress', {
+        runStatus: progress.runStatus,
+        currentStage: progress.currentStage,
+        completedStocks: progress.completedStocks,
+        totalStocks: progress.totalStocks,
+        currentSymbol: progress.currentSymbol,
+        lastMessage: progress.lastMessage,
+        error: progress.error,
+      });
+      setScreeningSyncStatus(prev => mergeScreeningSyncProgress(prev, progress));
+
+      if (isScreeningSyncTerminal(progress.runStatus)) {
+        void getScreeningSyncStatus()
+          .then((status) => {
+            setScreeningSyncStatus(prev => ({
+              ...mergeScreeningSyncProgress(prev, progress),
+              ...status,
+              events: (status.events && status.events.length > 0) ? status.events : progress.events,
+            }));
+          })
+          .catch(() => undefined);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  const resetScreeningSyncRunState = useCallback(() => {
+    setScreeningSyncStatus(prev => {
+      if (!prev || prev.runStatus === 'running') return prev;
+      return {
+        ...prev,
+        runStatus: undefined,
+        progressPercent: undefined,
+        totalStocks: undefined,
+        completedStocks: undefined,
+        currentSymbol: undefined,
+        currentName: undefined,
+        currentStage: undefined,
+        activeSource: undefined,
+        lastMessage: undefined,
+        limitStocks: undefined,
+        resumeFromCheckpoint: undefined,
+        events: [],
+        error: undefined,
+      };
+    });
+  }, []);
+
+  const openScreeningConfirm = useCallback((promptText: string) => {
+    const normalizedPrompt = promptText.trim();
+    if (!normalizedPrompt) return;
+    setWelcomeSyncError('');
+    resetScreeningSyncRunState();
+    setPendingScreeningPrompt(normalizedPrompt);
+    setScreeningConfirmSyncStarted(false);
+    setScreeningConfirmVisible(true);
+  }, [resetScreeningSyncRunState]);
+
+  const closeScreeningConfirm = useCallback(() => {
+    if (welcomeSyncLoading) return;
+    setScreeningConfirmSyncStarted(false);
+    setScreeningConfirmVisible(false);
+  }, [welcomeSyncLoading]);
+
+  const handleOpenSyncOnlyDialog = useCallback(() => {
+    if (topbarSyncButtonState.disabled) return;
+    setSyncOnlyError('');
+    resetScreeningSyncRunState();
+    setSyncOnlySyncStarted(false);
+    setSyncOnlyDialogVisible(true);
+  }, [resetScreeningSyncRunState, topbarSyncButtonState.disabled]);
+
+  const closeSyncOnlyDialog = useCallback(() => {
+    if (syncOnlyLoading) return;
+    setSyncOnlySyncStarted(false);
+    setSyncOnlyDialogVisible(false);
+  }, [syncOnlyLoading]);
 
   // 处理股票数据更新（来自后端推送）
   const handleStockUpdate = useCallback((stocks: Stock[]) => {
@@ -311,6 +544,7 @@ const App: React.FC = () => {
     if (!watchlist.find(s => s.symbol === newStock.symbol)) {
       await addToWatchlist(newStock);
       setWatchlist(prev => [...prev, newStock]);
+      setScreenMode('watchlist');
       // 添加后自动选中新股票并加载数据
       setSelectedSymbol(newStock.symbol);
       // 先清空 session，避免显示旧股票的消息
@@ -339,35 +573,51 @@ const App: React.FC = () => {
     }
   };
 
+  const loadSelectedStockContext = useCallback(async (symbol: string, stockName?: string) => {
+    setSelectedSymbol(symbol);
+    subscribeOrderBook(symbol);
+
+    const resolvedName = stockName || stockLookup.get(symbol)?.name;
+    if (!resolvedName) {
+      return;
+    }
+
+    const [session, orderBookData] = await Promise.all([
+      getOrCreateSession(symbol, resolvedName),
+      getOrderBook(symbol),
+    ]);
+    setCurrentSession(session);
+    setOrderBook(orderBookData);
+  }, [stockLookup, subscribeOrderBook]);
+
   // Handle Stock Selection - Load Session and sync data
   const handleSelectStock = async (symbol: string) => {
-    setSelectedSymbol(symbol);
-    // 订阅该股票的盘口推送
-    subscribeOrderBook(symbol);
-    const stock = stockLookup.get(symbol);
-    if (stock) {
-      // 并行加载 Session 和盘口数据
-      const [session, orderBookData] = await Promise.all([
-        getOrCreateSession(symbol, stock.name),
-        getOrderBook(symbol)
-      ]);
-      setCurrentSession(session);
-      setOrderBook(orderBookData);
-    }
+    await loadSelectedStockContext(symbol);
   };
 
-  const applyScreeningResponse = useCallback((response: ScreeningQueryResponse) => {
+  const applyScreeningResponse = useCallback((
+    response: ScreeningQueryResponse,
+    options?: {
+      source?: ScreeningRunSource;
+      historyRunId?: number | null;
+      rerunBaseRunId?: number | null;
+    },
+  ) => {
     setScreeningResults(response.results ?? []);
-    setScreeningRunId(response.runId ?? null);
     setScreeningTotalCount(response.totalCount ?? 0);
     setScreeningError('');
+    setScreeningResultTab('current');
+    setScreeningRunSource(options?.source ?? 'ai');
+    setScreeningSelectedHistoryRunId(options?.historyRunId ?? null);
+    setScreeningRerunBaseRunId(options?.rerunBaseRunId ?? null);
+    setScreeningGeneratedSql(response.generatedSql ?? '');
     if (response.prompt) {
       setScreeningPrompt(response.prompt);
     }
     if (response.results && response.results.length > 0) {
-      void handleSelectStock(response.results[0].symbol);
+      void loadSelectedStockContext(response.results[0].symbol, response.results[0].name);
     }
-  }, [handleSelectStock]);
+  }, [loadSelectedStockContext]);
 
   const refreshScreeningHistory = useCallback(async () => {
     try {
@@ -381,38 +631,363 @@ const App: React.FC = () => {
     }
   }, [watchlist.length]);
 
-  const handleRunScreening = useCallback(async () => {
-    if (!screeningPrompt.trim()) return;
-
+  const executeScreening = useCallback(async (
+    promptText: string,
+    options?: { universeSymbols?: string[] },
+  ) => {
+    const normalizedPrompt = promptText.trim();
+    if (!normalizedPrompt) return;
+    screeningCancelRequestedRef.current = false;
     setScreenMode('screening');
     setScreeningLoading(true);
     setScreeningError('');
+    setScreeningGeneratedSql('');
+    setScreeningSqlViewerOpen(false);
+    setScreeningQueryProgress({
+      runStatus: 'running',
+      currentStage: 'prepare',
+      progressPercent: 0,
+      message: '准备筛选请求',
+      prompt: normalizedPrompt,
+      universeCount: options?.universeSymbols?.length,
+      logs: [],
+    });
     try {
       const resultLimit = screeningPreset === 'unlimited' ? 0 : Number(screeningPreset);
       const resultMode: ScreeningResultMode = screeningPreset === 'unlimited' ? 'unlimited' : 'top_n';
       const response = await runScreeningQuery({
-        prompt: screeningPrompt.trim(),
+        prompt: normalizedPrompt,
         resultMode,
         resultLimit,
         page: 1,
         pageSize: screeningPreset === 'unlimited' ? 200 : resultLimit,
+        universeSymbols: options?.universeSymbols,
       });
-      applyScreeningResponse(response);
+      if (screeningCancelRequestedRef.current) {
+        return;
+      }
+      applyScreeningResponse(response, {
+        source: 'ai',
+        historyRunId: null,
+        rerunBaseRunId: null,
+      });
       await refreshScreeningHistory();
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'AI 筛选失败';
+      if (screeningCancelRequestedRef.current || isScreeningQueryCanceledMessage(message)) {
+        setScreeningError('');
+        setScreeningQueryProgress(prev => prev ? {
+          ...prev,
+          runStatus: 'canceled',
+          message: '已取消筛选',
+          error: undefined,
+        } : prev);
+        return;
+      }
       setScreeningError(error instanceof Error ? error.message : 'AI 筛选失败');
+      setScreeningQueryProgress(prev => prev ? {
+        ...prev,
+        runStatus: 'failed',
+        error: message,
+      } : prev);
     } finally {
       setScreeningLoading(false);
     }
-  }, [applyScreeningResponse, refreshScreeningHistory, screeningPreset, screeningPrompt]);
+  }, [applyScreeningResponse, refreshScreeningHistory, screeningPreset]);
+
+  const executeHistoryRerun = useCallback(async (runId: number) => {
+    screeningCancelRequestedRef.current = false;
+    setScreenMode('screening');
+    setScreeningLoading(true);
+    setScreeningError('');
+    setScreeningGeneratedSql('');
+    setScreeningSqlViewerOpen(false);
+    setScreeningQueryProgress({
+      runStatus: 'running',
+      currentStage: 'prepare',
+      progressPercent: 0,
+      message: '准备根据历史 SQL 重新筛选',
+      prompt: screeningPrompt.trim(),
+      logs: [],
+    });
+    try {
+      const response = await rerunScreeningHistoryRun(runId, 1, 200);
+      if (screeningCancelRequestedRef.current) {
+        return;
+      }
+      applyScreeningResponse(response, {
+        source: 'history_sql',
+        historyRunId: response.runId ?? runId,
+        rerunBaseRunId: response.runId ?? runId,
+      });
+      await refreshScreeningHistory();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '根据历史 SQL 重跑失败';
+      if (screeningCancelRequestedRef.current || isScreeningQueryCanceledMessage(message)) {
+        setScreeningError('');
+        setScreeningQueryProgress(prev => prev ? {
+          ...prev,
+          runStatus: 'canceled',
+          message: '已取消筛选',
+          error: undefined,
+        } : prev);
+        return;
+      }
+      setScreeningError(message);
+      setScreeningQueryProgress(prev => prev ? {
+        ...prev,
+        runStatus: 'failed',
+        error: message,
+      } : prev);
+    } finally {
+      setScreeningLoading(false);
+    }
+  }, [applyScreeningResponse, refreshScreeningHistory, screeningPrompt]);
+
+  const handleCancelRunningScreening = useCallback(async () => {
+    if (!screeningLoading) return;
+    screeningCancelRequestedRef.current = true;
+    setScreeningLoading(false);
+    setScreeningError('');
+    setScreeningQueryProgress(prev => prev ? {
+      ...prev,
+      runStatus: 'canceled',
+      message: '已取消筛选',
+      error: undefined,
+    } : {
+      runStatus: 'canceled',
+      currentStage: 'prepare',
+      progressPercent: 0,
+      message: '已取消筛选',
+      prompt: '',
+      logs: [],
+    });
+    try {
+      await cancelScreeningQuery();
+    } catch (error) {
+      console.error('Cancel screening query failed:', error);
+    }
+  }, [screeningLoading]);
+
+  const handleRunScreening = useCallback(async () => {
+    if (screeningRunSource === 'history_sql' && screeningRerunBaseRunId) {
+      await executeHistoryRerun(screeningRerunBaseRunId);
+      return;
+    }
+    openScreeningConfirm(screeningPrompt);
+  }, [executeHistoryRerun, openScreeningConfirm, screeningPrompt, screeningRerunBaseRunId, screeningRunSource]);
+
+  const handleOpenScreeningSettings = useCallback(() => {
+    setSettingsInitialTab('screening');
+    setShowSettings(true);
+  }, []);
+
+  const handleOpenGeneralSettings = useCallback(() => {
+    setSettingsInitialTab('provider');
+    setShowSettings(true);
+  }, []);
+
+  const handleCloseSettings = useCallback(() => {
+    setShowSettings(false);
+    setSettingsInitialTab('provider');
+    window.setTimeout(() => {
+      void refreshScreeningBootstrapState();
+    }, 700);
+  }, [refreshScreeningBootstrapState]);
+
+  const handleWelcomeScreeningSubmit = useCallback(async () => {
+    openScreeningConfirm(screeningPrompt);
+  }, [openScreeningConfirm, screeningPrompt]);
+
+  const handleWelcomeSyncAndContinue = useCallback(async () => {
+    const normalizedPrompt = pendingScreeningPrompt.trim();
+    if (!normalizedPrompt) return;
+
+    setScreeningConfirmSyncStarted(true);
+    setWelcomeSyncLoading(true);
+    setWelcomeSyncError('');
+    setScreeningSyncStatus(prev => createPendingScreeningSyncStatus(prev, {
+      initialSyncDays: screeningConfig?.initialSyncDays ?? 30,
+      retentionMode: screeningConfig?.retentionMode ?? 'forever',
+      retentionDays: screeningConfig?.retentionDays ?? 60,
+      limitStocks: welcomeSyncTestMode ? welcomeSyncTestLimit : 0,
+      message: '准备启动同步任务...',
+    }));
+    try {
+      let universeSymbols: string[] | undefined;
+      console.debug('[screening-sync] start sync-and-screen', {
+        limitStocks: welcomeSyncTestMode ? welcomeSyncTestLimit : 0,
+        prompt: normalizedPrompt,
+      });
+
+      const status = await runScreeningSync({
+        mode: 'manual',
+        limitStocks: welcomeSyncTestMode ? welcomeSyncTestLimit : 0,
+      });
+      console.debug('[screening-sync] sync-and-screen finished', {
+        runStatus: status.runStatus,
+        completedStocks: status.completedStocks,
+        totalStocks: status.totalStocks,
+        syncedToLatestStocks: status.syncedToLatestStocks,
+        lastMessage: status.lastMessage,
+        error: status.error,
+      });
+      setScreeningSyncStatus(status);
+      await refreshScreeningBootstrapState();
+      if (!shouldContinueAfterScreeningSync(status)) {
+        setScreeningConfirmSyncStarted(false);
+        setWelcomeSyncError(
+          status.runStatus === 'canceled'
+            ? '同步已取消'
+            : (status.error || '同步失败'),
+        );
+        return;
+      }
+      if (welcomeSyncTestMode) {
+        universeSymbols = status.syncedSymbols && status.syncedSymbols.length > 0
+          ? status.syncedSymbols
+          : await getScreeningUniverseSymbols(welcomeSyncTestLimit);
+      }
+
+      if (welcomeSyncTestMode && (!universeSymbols || universeSymbols.length === 0)) {
+        setWelcomeSyncError('测试范围已开启，但未获取到可用于 AI 筛选的股票范围');
+        return;
+      }
+
+      setScreeningConfirmSyncStarted(false);
+      setScreeningConfirmVisible(false);
+      await executeScreening(normalizedPrompt, { universeSymbols });
+    } catch (error) {
+      setWelcomeSyncError(error instanceof Error ? error.message : '同步失败');
+    } finally {
+      setWelcomeSyncLoading(false);
+    }
+  }, [executeScreening, pendingScreeningPrompt, refreshScreeningBootstrapState, screeningConfig, welcomeSyncTestLimit, welcomeSyncTestMode]);
+
+  const handleCancelScreeningConfirm = useCallback(async () => {
+    const isSyncRunning = welcomeSyncLoading || screeningSyncStatus?.runStatus === 'running';
+    if (!isSyncRunning) {
+      setScreeningConfirmSyncStarted(false);
+      setScreeningConfirmVisible(false);
+      return;
+    }
+
+    try {
+      console.debug('[screening-sync] cancel sync-and-screen requested', {
+        loading: welcomeSyncLoading,
+        runStatus: screeningSyncStatus?.runStatus,
+      });
+      const canceled = await cancelScreeningSync();
+      if (!canceled) {
+        setWelcomeSyncError('当前没有正在执行的同步任务');
+        return;
+      }
+      setWelcomeSyncError('');
+      setScreeningSyncStatus(prev => prev ? {
+        ...prev,
+        lastMessage: '已发送取消请求，将在当前股票处理完成后停止',
+      } : prev);
+      window.setTimeout(() => {
+        void refreshScreeningBootstrapState();
+      }, 1200);
+    } catch (error) {
+      setWelcomeSyncError(error instanceof Error ? error.message : '取消同步失败');
+    }
+  }, [refreshScreeningBootstrapState, screeningSyncStatus?.runStatus, welcomeSyncLoading]);
+
+  const handleStartSyncOnly = useCallback(async () => {
+    setSyncOnlySyncStarted(true);
+    setSyncOnlyLoading(true);
+    setSyncOnlyError('');
+    setScreeningSyncStatus(prev => createPendingScreeningSyncStatus(prev, {
+      initialSyncDays: screeningConfig?.initialSyncDays ?? 30,
+      retentionMode: screeningConfig?.retentionMode ?? 'forever',
+      retentionDays: screeningConfig?.retentionDays ?? 60,
+      limitStocks: 0,
+      message: '准备启动同步任务...',
+    }));
+    try {
+      console.debug('[screening-sync] start sync-only');
+      const status = await runScreeningSync({
+        mode: 'manual',
+        limitStocks: 0,
+      });
+      console.debug('[screening-sync] sync-only finished', {
+        runStatus: status.runStatus,
+        completedStocks: status.completedStocks,
+        totalStocks: status.totalStocks,
+        syncedToLatestStocks: status.syncedToLatestStocks,
+        lastMessage: status.lastMessage,
+        error: status.error,
+      });
+      setScreeningSyncStatus(status);
+      await refreshScreeningBootstrapState();
+      if (status.error) {
+        setSyncOnlyError(status.error);
+        return;
+      }
+      if (status.runStatus === 'failed') {
+        setSyncOnlyError('同步失败');
+        return;
+      }
+      if (status.runStatus === 'canceled') {
+        setSyncOnlyError('同步已取消');
+        return;
+      }
+      setSyncOnlySyncStarted(false);
+      setSyncOnlyDialogVisible(false);
+    } catch (error) {
+      setSyncOnlyError(error instanceof Error ? error.message : '同步失败');
+    } finally {
+      setSyncOnlyLoading(false);
+    }
+  }, [refreshScreeningBootstrapState, screeningConfig]);
+
+  const handleCancelSyncOnly = useCallback(async () => {
+    const isSyncRunning = syncOnlyLoading || screeningSyncStatus?.runStatus === 'running';
+    if (!isSyncRunning) {
+      setSyncOnlySyncStarted(false);
+      setSyncOnlyDialogVisible(false);
+      return;
+    }
+
+    try {
+      console.debug('[screening-sync] cancel sync-only requested', {
+        loading: syncOnlyLoading,
+        runStatus: screeningSyncStatus?.runStatus,
+      });
+      const canceled = await cancelScreeningSync();
+      if (!canceled) {
+        setSyncOnlyError('当前没有正在执行的同步任务');
+        return;
+      }
+      setSyncOnlyError('');
+      setScreeningSyncStatus(prev => prev ? {
+        ...prev,
+        lastMessage: '已发送取消请求，将在当前股票处理完成后停止',
+      } : prev);
+      window.setTimeout(() => {
+        void refreshScreeningBootstrapState();
+      }, 1200);
+    } catch (error) {
+      setSyncOnlyError(error instanceof Error ? error.message : '取消同步失败');
+    }
+  }, [refreshScreeningBootstrapState, screeningSyncStatus?.runStatus, syncOnlyLoading]);
 
   const handleSelectScreeningHistory = useCallback(async (runId: number) => {
     setScreenMode('screening');
     setScreeningLoading(true);
     setScreeningError('');
+    setScreeningGeneratedSql('');
+    setScreeningSqlViewerOpen(false);
+    setScreeningQueryProgress(null);
     try {
       const response = await getScreeningHistoryRun(runId, 1, 200);
-      applyScreeningResponse(response);
+      applyScreeningResponse(response, {
+        source: 'history_sql',
+        historyRunId: runId,
+        rerunBaseRunId: runId,
+      });
     } catch (error) {
       setScreeningError(error instanceof Error ? error.message : '加载历史筛选失败');
     } finally {
@@ -425,21 +1000,25 @@ const App: React.FC = () => {
     const loadWatchlist = async () => {
       try {
         // 加载布局配置
-        const config = await getConfig();
-        if (config.layout) {
-          if (config.layout.leftPanelWidth > 0) setLeftPanelWidth(config.layout.leftPanelWidth);
-          if (config.layout.rightPanelWidth > 0) setRightPanelWidth(config.layout.rightPanelWidth);
-          if (config.layout.bottomPanelHeight > 0) setBottomPanelHeight(config.layout.bottomPanelHeight);
+        const appConfig = await getConfig();
+        if (appConfig.layout) {
+          if (appConfig.layout.leftPanelWidth > 0) setLeftPanelWidth(appConfig.layout.leftPanelWidth);
+          if (appConfig.layout.rightPanelWidth > 0) setRightPanelWidth(appConfig.layout.rightPanelWidth);
+          if (appConfig.layout.bottomPanelHeight > 0) setBottomPanelHeight(appConfig.layout.bottomPanelHeight);
           // 恢复窗口大小
-          if (config.layout.windowWidth > 0 && config.layout.windowHeight > 0) {
-            WindowSetSize(config.layout.windowWidth, config.layout.windowHeight);
+          if (appConfig.layout.windowWidth > 0 && appConfig.layout.windowHeight > 0) {
+            WindowSetSize(appConfig.layout.windowWidth, appConfig.layout.windowHeight);
           }
         }
 
-        const [list, history] = await Promise.all([
+        const [status, list, history] = await Promise.all([
+          getScreeningSyncStatus().catch(() => null),
           getWatchlist(),
           listScreeningHistory(20).catch(() => []),
         ]);
+        setScreeningConfig((appConfig.screening as ScreeningConfig) ?? null);
+        setScreeningSQLTimeoutLabel(resolveDefaultScreeningSQLTimeoutLabel(appConfig));
+        setScreeningSyncStatus(status);
         setWatchlist(list);
         setScreeningHistory(history);
         if (list.length === 0 && history.length > 0) {
@@ -514,12 +1093,55 @@ const App: React.FC = () => {
 
   if (loading) return <div className="h-screen w-screen flex items-center justify-center fin-app text-white">加载中...</div>;
 
-  // 没有自选股时显示欢迎页面
-  if (watchlist.length === 0 && screeningHistory.length === 0 && screeningResults.length === 0) {
+  const shouldShowHomePage = screenMode === 'home' || (
+    watchlist.length === 0 &&
+    screeningHistory.length === 0 &&
+    screeningResults.length === 0 &&
+    screenMode !== 'screening' &&
+    !screeningLoading
+  );
+
+  if (shouldShowHomePage) {
     return (
       <>
-        <WelcomePage onAddStock={handleAddStock} onOpenSettings={() => setShowSettings(true)} />
-        <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} />
+        <WelcomePage
+          screeningPrompt={screeningPrompt}
+          onScreeningPromptChange={(value) => {
+            setScreeningPrompt(value);
+            if (screeningConfirmVisible) {
+              setScreeningConfirmVisible(false);
+            }
+            if (welcomeSyncError) {
+              setWelcomeSyncError('');
+            }
+          }}
+          onSubmitScreening={() => { void handleWelcomeScreeningSubmit(); }}
+          screeningSubmitting={screeningLoading}
+          onAddStock={handleAddStock}
+          hasExistingWorkspace={watchlist.length > 0 || screeningHistory.length > 0 || screeningResults.length > 0}
+          onOpenWatchlist={() => setScreenMode('watchlist')}
+          onOpenScreening={() => setScreenMode('screening')}
+          onOpenSettings={handleOpenGeneralSettings}
+        />
+        <SettingsDialog isOpen={showSettings} onClose={handleCloseSettings} initialTab={settingsInitialTab} />
+        <SyncActionDialog
+          mode="screening"
+          visible={screeningConfirmVisible}
+          syncStarted={screeningConfirmSyncStarted}
+          prompt={pendingScreeningPrompt}
+          syncSummary={screeningSummary}
+          syncStatus={screeningSyncStatus}
+          loading={welcomeSyncLoading}
+          error={welcomeSyncError}
+          testMode={welcomeSyncTestMode}
+          testLimit={welcomeSyncTestLimit}
+          onTestModeChange={setWelcomeSyncTestMode}
+          onTestLimitChange={setWelcomeSyncTestLimit}
+          onClose={closeScreeningConfirm}
+          onCancelSync={() => { void handleCancelScreeningConfirm(); }}
+          onConfirm={() => { void handleWelcomeSyncAndContinue(); }}
+          onOpenSyncSettings={handleOpenScreeningSettings}
+        />
       </>
     );
   }
@@ -541,6 +1163,14 @@ const App: React.FC = () => {
           <img src={logo} alt="logo" className="h-8 w-8 rounded-lg" />
           <span className={`font-bold text-lg tracking-tight ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>散牛盘 <span className="text-accent-2">AI</span></span>
           <div className={`ml-4 inline-flex rounded-full border p-1 ${colors.isDark ? 'border-slate-700 bg-slate-900/50' : 'border-slate-300 bg-white/70'}`}>
+            <button
+              onClick={() => setScreenMode('home')}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+                colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              首页
+            </button>
             <button
               onClick={() => setScreenMode('watchlist')}
               className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
@@ -611,22 +1241,42 @@ const App: React.FC = () => {
 
         <div className="flex items-center gap-3" style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}>
           <button
+            onClick={handleOpenSyncOnlyDialog}
+            disabled={topbarSyncButtonState.disabled}
+            className={`inline-flex h-10 min-w-[164px] items-center justify-between gap-3 rounded-xl border px-4 text-sm font-medium transition-colors ${
+              getTopbarSyncButtonToneStyles(topbarSyncButtonState.tone, colors.isDark, topbarSyncButtonState.disabled)
+            }`}
+            title={topbarSyncButtonState.label}
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              {topbarSyncButtonState.loading && (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              )}
+              <span className="truncate">{topbarSyncButtonState.label}</span>
+            </div>
+            <span className="shrink-0 text-sm opacity-80">{topbarSyncButtonState.detail}</span>
+          </button>
+          <button
             onClick={() => setShowLongHuBang(true)}
-            className={`p-2 rounded-lg fin-panel border fin-divider transition-colors ${colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'} hover:border-red-400/40`}
+            className={`rounded-xl border px-4 py-2 text-sm font-medium fin-panel fin-divider transition-colors ${
+              colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'
+            } hover:border-red-400/40`}
             title="龙虎榜"
           >
-            <BarChart3 className="h-4 w-4" />
+            龙虎榜
           </button>
           <button
             onClick={() => setShowHotTrend(true)}
-            className={`p-2 rounded-lg fin-panel border fin-divider transition-colors ${colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'} hover:border-orange-400/40`}
+            className={`rounded-xl border px-4 py-2 text-sm font-medium fin-panel fin-divider transition-colors ${
+              colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'
+            } hover:border-orange-400/40`}
             title="全网热点"
           >
-            <TrendingUp className="h-4 w-4" />
+            全网热点
           </button>
           <ThemeSwitcher />
           <button
-            onClick={() => setShowSettings(true)}
+            onClick={handleOpenGeneralSettings}
             className={`p-2 rounded-lg fin-panel border fin-divider transition-colors ${colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'} hover:border-accent/40`}
           >
             <Settings className="h-4 w-4" />
@@ -684,29 +1334,47 @@ const App: React.FC = () => {
             />
           ) : (
             <div className="flex h-full flex-col">
-              <div className="min-h-0 basis-[56%] border-b fin-divider-soft">
+              <div className="min-h-0 flex-1">
                 <ScreeningResultList
+                  activeTab={screeningResultTab}
                   results={screeningResults}
+                  history={screeningHistory}
+                  generatedSql={screeningGeneratedSql}
                   selectedSymbol={selectedSymbol}
+                  selectedHistoryRunId={screeningSelectedHistoryRunId}
                   totalCount={screeningTotalCount}
                   isLoading={screeningLoading}
+                  queryProgress={screeningQueryProgress}
                   error={screeningError}
                   watchlistSymbols={watchlistSymbols}
+                  onTabChange={setScreeningResultTab}
+                  onSelectHistory={(runId) => { void handleSelectScreeningHistory(runId); }}
                   onSelect={(symbol) => { void handleSelectStock(symbol); }}
                   onAddToWatchlist={handleAddStock}
                 />
               </div>
-              <div className="min-h-0 flex-1">
+              <div className="shrink-0 border-t fin-divider-soft">
                 <ScreeningWorkspace
                   prompt={screeningPrompt}
                   resultPreset={screeningPreset}
                   loading={screeningLoading}
-                  history={screeningHistory}
-                  selectedRunId={screeningRunId}
-                  onPromptChange={setScreeningPrompt}
+                  canReuseHistorySql={canReuseHistorySql}
+                  canCancel={screeningLoading}
+                  generatedSql={screeningGeneratedSql}
+                  onPromptChange={(value) => {
+                    setScreeningPrompt(value);
+                    if (screeningRunSource === 'history_sql') {
+                      setScreeningRunSource('ai');
+                      setScreeningRerunBaseRunId(null);
+                      setScreeningSelectedHistoryRunId(null);
+                    }
+                    setScreeningGeneratedSql('');
+                    setScreeningSqlViewerOpen(false);
+                  }}
                   onResultPresetChange={(value) => setScreeningPreset(value as ScreeningResultPreset)}
                   onRun={() => { void handleRunScreening(); }}
-                  onSelectHistory={(runId) => { void handleSelectScreeningHistory(runId); }}
+                  onCancel={() => { void handleCancelRunningScreening(); }}
+                  onViewSql={() => setScreeningSqlViewerOpen(true)}
                 />
               </div>
             </div>
@@ -831,7 +1499,7 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} />
+        <SettingsDialog isOpen={showSettings} onClose={handleCloseSettings} initialTab={settingsInitialTab} />
       {selectedStock && (
         <PositionDialog
           isOpen={showPosition}
@@ -849,8 +1517,506 @@ const App: React.FC = () => {
       )}
       <HotTrendDialog isOpen={showHotTrend} onClose={() => setShowHotTrend(false)} />
       <LongHuBangDialog isOpen={showLongHuBang} onClose={() => setShowLongHuBang(false)} />
+      <ScreeningSQLDialog
+        isOpen={screeningSqlViewerOpen}
+        sql={screeningGeneratedSql}
+        onClose={() => setScreeningSqlViewerOpen(false)}
+      />
+      <SyncActionDialog
+        mode="screening"
+        visible={screeningConfirmVisible}
+        syncStarted={screeningConfirmSyncStarted}
+        prompt={pendingScreeningPrompt}
+        syncSummary={screeningSummary}
+        syncStatus={screeningSyncStatus}
+        loading={welcomeSyncLoading}
+        error={welcomeSyncError}
+        testMode={welcomeSyncTestMode}
+        testLimit={welcomeSyncTestLimit}
+        onTestModeChange={setWelcomeSyncTestMode}
+        onTestLimitChange={setWelcomeSyncTestLimit}
+        onClose={closeScreeningConfirm}
+        onCancelSync={() => { void handleCancelScreeningConfirm(); }}
+        onConfirm={() => { void handleWelcomeSyncAndContinue(); }}
+        onOpenSyncSettings={handleOpenScreeningSettings}
+      />
+      <SyncActionDialog
+        mode="sync-only"
+        visible={syncOnlyDialogVisible}
+        syncStarted={syncOnlySyncStarted}
+        syncSummary={screeningSummary}
+        syncStatus={screeningSyncStatus}
+        loading={syncOnlyLoading}
+        error={syncOnlyError}
+        onClose={closeSyncOnlyDialog}
+        onCancelSync={() => { void handleCancelSyncOnly(); }}
+        onConfirm={() => { void handleStartSyncOnly(); }}
+        onOpenSyncSettings={handleOpenScreeningSettings}
+      />
     </div>
   );
+};
+
+interface ScreeningSQLDialogProps {
+  isOpen: boolean;
+  sql: string;
+  onClose: () => void;
+}
+
+interface SyncActionDialogProps {
+  mode: ScreeningSyncDialogMode;
+  visible: boolean;
+  syncStarted: boolean;
+  prompt?: string;
+  syncSummary: {
+    strategyItems: Array<{ label: string; value: string }>;
+    dataItems: Array<{ label: string; value: string; tone?: SyncHealthTone }>;
+    healthSummary: {
+      tone: SyncHealthTone;
+      title: string;
+      detail: string;
+    };
+  };
+  syncStatus: ScreeningSyncStatus | null;
+  loading: boolean;
+  error: string;
+  testMode?: boolean;
+  testLimit?: number;
+  onTestModeChange?: (value: boolean) => void;
+  onTestLimitChange?: (value: number) => void;
+  onClose: () => void;
+  onCancelSync: () => void;
+  onConfirm: () => void;
+  onOpenSyncSettings: () => void;
+}
+
+const SyncActionDialog: React.FC<SyncActionDialogProps> = ({
+  mode,
+  visible,
+  syncStarted,
+  prompt,
+  syncSummary,
+  syncStatus,
+  loading,
+  error,
+  testMode = false,
+  testLimit = 10,
+  onTestModeChange,
+  onTestLimitChange,
+  onClose,
+  onCancelSync,
+  onConfirm,
+  onOpenSyncSettings,
+}) => {
+  const { colors } = useTheme();
+  const copy = resolveSyncDialogCopy(mode);
+  const isScreeningMode = mode === 'screening';
+  const syncProgressPercent = Math.max(0, Math.min(100, Math.round(syncStatus?.progressPercent ?? 0)));
+  const syncRecentEvents = (syncStatus?.events ?? []).slice(-3).reverse();
+  const isSyncRunning = loading || syncStatus?.runStatus === 'running';
+  const shouldShowSyncProgress = syncStarted && (
+    loading
+    || syncStatus?.runStatus === 'running'
+    || syncStatus?.runStatus === 'failed'
+    || syncStatus?.runStatus === 'canceled'
+    || (mode === 'sync-only' && syncStatus?.runStatus === 'completed')
+    || Boolean(syncStatus?.error)
+    || Boolean(error)
+  );
+
+  if (!visible) return null;
+
+  const healthToneStyles = getSyncHealthToneStyles(syncSummary.healthSummary.tone, colors.isDark);
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-sm">
+      <div className={`w-full max-w-2xl rounded-3xl border shadow-2xl ${
+        colors.isDark ? 'border-slate-700 bg-slate-900/95' : 'border-slate-200 bg-white/95'
+      }`}>
+        <div className="flex items-start justify-between gap-4 border-b fin-divider-soft px-6 py-5">
+          <div className="min-w-0 flex-1 text-left">
+            <div className={`text-lg font-semibold ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>
+              {copy.title}
+            </div>
+            <div className={`mt-1 text-sm ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+              {copy.description}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={loading}
+            className={`rounded-full p-2 ${colors.isDark ? 'text-slate-400 hover:bg-slate-800/80 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'} disabled:opacity-50`}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-4 px-6 py-5">
+          {!syncStarted && (
+            <>
+              {isScreeningMode && (
+                <div className={`rounded-2xl border px-4 py-4 ${colors.isDark ? 'border-slate-700 bg-slate-950/40' : 'border-slate-200 bg-slate-50/80'}`}>
+                  <div className={`text-left text-sm font-semibold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>本次筛选条件</div>
+                  <div className={`mt-2 whitespace-pre-wrap text-left text-sm ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>{prompt}</div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className={`rounded-2xl border px-4 py-4 ${colors.isDark ? 'border-slate-700 bg-slate-950/40' : 'border-slate-200 bg-slate-50/80'}`}>
+                  <div className={`text-left text-sm font-semibold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>当前同步策略</div>
+                  <div className="mt-3 space-y-2">
+                    {syncSummary.strategyItems.map((item) => (
+                      <div key={item.label} className="flex items-start justify-between gap-3 text-sm">
+                        <span className={colors.isDark ? 'text-slate-400' : 'text-slate-500'}>{item.label}</span>
+                        <span className={`text-right font-medium ${colors.isDark ? 'text-slate-200' : 'text-slate-700'}`}>{item.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className={`rounded-2xl border px-4 py-4 ${colors.isDark ? 'border-slate-700 bg-slate-950/40' : 'border-slate-200 bg-slate-50/80'}`}>
+                  <div className={`text-left text-sm font-semibold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>当前数据状态</div>
+                  <div className={`mt-3 rounded-2xl border px-3 py-3 ${healthToneStyles.panel}`}>
+                    <div className="flex items-start gap-3">
+                      <div className={`mt-0.5 ${healthToneStyles.icon}`}>
+                        {syncSummary.healthSummary.tone === 'success' ? (
+                          <CheckCircle2 className="h-4 w-4" />
+                        ) : syncSummary.healthSummary.tone === 'warning' ? (
+                          <Clock3 className="h-4 w-4" />
+                        ) : (
+                          <AlertCircle className="h-4 w-4" />
+                        )}
+                      </div>
+                      <div className="text-left">
+                        <div className={`text-sm font-semibold ${healthToneStyles.text}`}>{syncSummary.healthSummary.title}</div>
+                        <div className={`mt-1 text-xs ${healthToneStyles.subtext}`}>{syncSummary.healthSummary.detail}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    {syncSummary.dataItems.map((item) => (
+                      <div key={item.label} className={`rounded-xl border px-3 py-3 ${colors.isDark ? 'border-slate-800 bg-slate-900/70' : 'border-slate-200 bg-white/70'}`}>
+                        <div className={`text-[11px] ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>{item.label}</div>
+                        <div className={`mt-1 text-sm font-semibold ${resolveSyncDataItemToneClass(item.tone, colors.isDark)}`}>{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {isScreeningMode && (
+                <div className={`rounded-2xl border px-4 py-4 ${colors.isDark ? 'border-slate-700 bg-slate-950/40' : 'border-slate-200 bg-slate-50/80'}`}>
+                  <div className={`text-left text-sm font-semibold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>测试范围</div>
+                  <label className="mt-3 flex items-center gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={testMode}
+                      disabled={loading}
+                      onChange={(e) => onTestModeChange?.(e.target.checked)}
+                      className="h-4 w-4 rounded border-slate-400 text-[var(--accent)] focus:ring-[var(--accent)]"
+                    />
+                    <span className={colors.isDark ? 'text-slate-200' : 'text-slate-700'}>只同步并筛选前</span>
+                    <select
+                      value={String(testLimit)}
+                      disabled={!testMode || loading}
+                      onChange={(e) => onTestLimitChange?.(Number(e.target.value))}
+                      className={`rounded-xl border px-3 py-2 text-sm ${colors.isDark ? 'border-slate-600 bg-slate-800/70 text-white disabled:text-slate-500' : 'border-slate-300 bg-white text-slate-800 disabled:text-slate-400'}`}
+                    >
+                      <option value="10">10 只</option>
+                      <option value="20">20 只</option>
+                      <option value="50">50 只</option>
+                      <option value="100">100 只</option>
+                    </select>
+                    <span className={colors.isDark ? 'text-slate-200' : 'text-slate-700'}>股票</span>
+                  </label>
+                  <div className={`mt-2 text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                    {testMode
+                      ? '勾选后，本次会只同步并筛选这批股票。'
+                      : '不勾选时，本次会基于当前市场范围做全量同步和全量筛选。'}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {shouldShowSyncProgress && (
+            <div className={`rounded-2xl border px-4 py-4 ${colors.isDark ? 'border-slate-700 bg-slate-950/40' : 'border-slate-200 bg-slate-50/80'}`}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1 text-left">
+                  <div className={`text-sm font-semibold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>同步进度</div>
+                  <div className={`mt-1 text-xs ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    {formatScreeningSyncRunStatus(syncStatus?.runStatus)}
+                    {syncStatus?.lastMessage ? ` · ${syncStatus.lastMessage}` : ''}
+                  </div>
+                </div>
+                <div className={`text-2xl font-semibold tabular-nums ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>
+                  {syncProgressPercent}%
+                </div>
+              </div>
+              <div className={`mt-3 h-2 overflow-hidden rounded-full ${colors.isDark ? 'bg-slate-800' : 'bg-slate-200'}`}>
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)] transition-all"
+                  style={{ width: `${syncProgressPercent}%` }}
+                />
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+                <div className={`rounded-xl border px-3 py-3 ${colors.isDark ? 'border-slate-700/70 bg-slate-900/70' : 'border-slate-200 bg-white/70'}`}>
+                  <div className={colors.isDark ? 'text-slate-400' : 'text-slate-500'}>当前股票</div>
+                  <div className={`mt-1 font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>
+                    {syncStatus?.currentSymbol
+                      ? `${syncStatus.currentSymbol}${syncStatus.currentName ? ` · ${syncStatus.currentName}` : ''}`
+                      : '--'}
+                  </div>
+                </div>
+                <div className={`rounded-xl border px-3 py-3 ${colors.isDark ? 'border-slate-700/70 bg-slate-900/70' : 'border-slate-200 bg-white/70'}`}>
+                  <div className={colors.isDark ? 'text-slate-400' : 'text-slate-500'}>已完成 / 总数</div>
+                  <div className={`mt-1 font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>
+                    {(syncStatus?.completedStocks ?? 0)} / {(syncStatus?.totalStocks ?? '--')}
+                  </div>
+                </div>
+                <div className={`rounded-xl border px-3 py-3 ${colors.isDark ? 'border-slate-700/70 bg-slate-900/70' : 'border-slate-200 bg-white/70'}`}>
+                  <div className={colors.isDark ? 'text-slate-400' : 'text-slate-500'}>当前数据源</div>
+                  <div className={`mt-1 font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>
+                    {formatScreeningSourceName(syncStatus?.activeSource)}
+                  </div>
+                </div>
+                <div className={`rounded-xl border px-3 py-3 ${colors.isDark ? 'border-slate-700/70 bg-slate-900/70' : 'border-slate-200 bg-white/70'}`}>
+                  <div className={colors.isDark ? 'text-slate-400' : 'text-slate-500'}>当前阶段</div>
+                  <div className={`mt-1 font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>
+                    {formatScreeningSyncStage(syncStatus?.currentStage)}
+                  </div>
+                </div>
+              </div>
+              {syncRecentEvents.length > 0 && (
+                <div className="mt-3 space-y-2">
+                  {syncRecentEvents.map((event, index) => (
+                    <div
+                      key={`${event.time}-${event.symbol}-${event.source}-${index}`}
+                      className={`rounded-xl border px-3 py-2 text-xs ${colors.isDark ? 'border-slate-700/70 bg-slate-900/60 text-slate-300' : 'border-slate-200 bg-white/70 text-slate-600'}`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span>{event.time || '--'}</span>
+                        <span>{formatScreeningSourceName(event.source)}</span>
+                      </div>
+                      <div className="mt-1">
+                        {event.message || syncStatus?.lastMessage || '--'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {error && (
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+              {error}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t fin-divider-soft px-6 py-4">
+          <button
+            type="button"
+            onClick={onOpenSyncSettings}
+            className={`rounded-xl border px-4 py-2 text-sm transition-colors ${
+              colors.isDark
+                ? 'border-slate-600 bg-slate-800/70 text-slate-200 hover:text-white'
+                : 'border-slate-300 bg-white text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            查看同步设置
+          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={isSyncRunning ? onCancelSync : onClose}
+              className={`rounded-xl border px-4 py-2 text-sm ${colors.isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800/70' : 'border-slate-300 text-slate-600 hover:bg-slate-100'} disabled:opacity-50`}
+            >
+              {isSyncRunning ? '取消同步' : '取消'}
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+            >
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              <span>{loading ? (isScreeningMode ? '同步并筛选中...' : '同步中...') : copy.confirmLabel}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const resolveScreeningSyncHealthSummary = (status: ScreeningSyncStatus | null): {
+  tone: SyncHealthTone;
+  title: string;
+  detail: string;
+} => {
+  const targetTradeDate = status?.targetTradeDate || '';
+  const latestSyncedTradeDate = status?.latestSyncedTradeDate || status?.lastTradeDate || '';
+  const syncedToLatest = status?.syncedToLatestStocks ?? 0;
+  const pendingSync = status?.pendingSyncStocks ?? 0;
+  const totalStocks = status?.marketStockCount ?? 0;
+
+  if (!targetTradeDate) {
+    return {
+      tone: 'danger',
+      title: '尚未建立最新同步状态',
+      detail: '当前还无法判断最近交易日是否已经同步，请先执行一次同步。',
+    };
+  }
+
+  if (latestSyncedTradeDate && latestSyncedTradeDate < targetTradeDate) {
+    return {
+      tone: 'danger',
+      title: '需要同步最新交易日数据',
+      detail: `最近交易日为 ${formatDateDisplay(targetTradeDate)}，当前库内最新只到 ${formatDateDisplay(latestSyncedTradeDate)}。`,
+    };
+  }
+
+  if (pendingSync > 0) {
+    return {
+      tone: 'warning',
+      title: '最新交易日只完成了部分同步',
+      detail: `最近交易日 ${formatDateDisplay(targetTradeDate)} 已同步 ${syncedToLatest} 只，待同步 ${pendingSync} 只，共 ${totalStocks} 只。`,
+    };
+  }
+
+  return {
+    tone: 'success',
+    title: '最新交易日已同步完成',
+    detail: `最近交易日 ${formatDateDisplay(targetTradeDate)} 已完成全市场同步，共 ${totalStocks} 只股票。`,
+  };
+};
+
+const getSyncHealthToneStyles = (tone: SyncHealthTone, isDark: boolean) => {
+  if (tone === 'success') {
+    return {
+      panel: isDark ? 'border-emerald-500/20 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50',
+      icon: isDark ? 'text-emerald-300' : 'text-emerald-600',
+      text: isDark ? 'text-emerald-200' : 'text-emerald-700',
+      subtext: isDark ? 'text-emerald-100/80' : 'text-emerald-700/80',
+    };
+  }
+  if (tone === 'warning') {
+    return {
+      panel: isDark ? 'border-amber-500/20 bg-amber-500/10' : 'border-amber-200 bg-amber-50',
+      icon: isDark ? 'text-amber-300' : 'text-amber-600',
+      text: isDark ? 'text-amber-200' : 'text-amber-700',
+      subtext: isDark ? 'text-amber-100/80' : 'text-amber-700/80',
+    };
+  }
+  return {
+    panel: isDark ? 'border-red-500/20 bg-red-500/10' : 'border-red-200 bg-red-50',
+    icon: isDark ? 'text-red-300' : 'text-red-600',
+    text: isDark ? 'text-red-200' : 'text-red-700',
+    subtext: isDark ? 'text-red-100/80' : 'text-red-700/80',
+  };
+};
+
+const resolveSyncDataItemToneClass = (tone: SyncHealthTone | undefined, isDark: boolean): string => {
+  if (tone === 'success') {
+    return isDark ? 'text-emerald-300' : 'text-emerald-700';
+  }
+  if (tone === 'warning') {
+    return isDark ? 'text-amber-300' : 'text-amber-700';
+  }
+  if (tone === 'danger') {
+    return isDark ? 'text-red-300' : 'text-red-700';
+  }
+  return isDark ? 'text-slate-200' : 'text-slate-700';
+};
+
+const getTopbarSyncButtonToneStyles = (
+  tone: SyncButtonTone,
+  isDark: boolean,
+  disabled: boolean,
+): string => {
+  const disabledClass = disabled ? 'cursor-not-allowed' : '';
+  if (tone === 'success') {
+    return `${disabledClass} ${
+      isDark
+        ? 'border-emerald-500/30 bg-emerald-500/12 text-emerald-200'
+        : 'border-emerald-300 bg-emerald-50 text-emerald-700'
+    }`;
+  }
+  if (tone === 'warning') {
+    return `${disabledClass} ${
+      isDark
+        ? 'border-amber-500/30 bg-amber-500/12 text-amber-200 hover:border-amber-400/50 hover:text-amber-100'
+        : 'border-amber-300 bg-amber-50 text-amber-700 hover:border-amber-400 hover:text-amber-800'
+    }`;
+  }
+  return `${disabledClass} ${
+    isDark
+      ? 'border-red-500/30 bg-red-500/12 text-red-200 hover:border-red-400/50 hover:text-red-100'
+      : 'border-red-300 bg-red-50 text-red-700 hover:border-red-400 hover:text-red-800'
+  }`;
+};
+
+const ScreeningSQLDialog: React.FC<ScreeningSQLDialogProps> = ({
+  isOpen,
+  sql,
+  onClose,
+}) => {
+  if (!isOpen || !sql.trim()) return null;
+
+  return (
+    <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/55 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-3xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div>
+            <div className="text-lg font-semibold text-slate-800">当前筛选 SQL</div>
+            <div className="mt-1 text-sm text-slate-500">只读展示当前筛选结果对应的 SQL 语句。</div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="px-6 py-5">
+          <pre className="max-h-[60vh] overflow-auto rounded-2xl bg-slate-950 px-4 py-4 font-mono text-xs leading-6 text-slate-100">
+            <code>{sql}</code>
+          </pre>
+
+          <div className="mt-4 flex justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent/90"
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const formatScreeningSyncStage = (stage?: string): string => {
+  switch ((stage || '').toLowerCase()) {
+    case 'prepare':
+      return '准备中';
+    case 'syncing':
+      return '同步中';
+    case 'completed':
+      return '已完成';
+    case 'failed':
+      return '失败';
+    case 'canceled':
+      return '已取消';
+    default:
+      return stage || '--';
+  }
 };
 
 // A股行情数据项组件
@@ -909,5 +2075,18 @@ const mapScreeningResultToStock = (result: ScreeningRunResult): Stock => ({
   low: result.price,
   preClose: result.changePercent !== -100 ? result.price / (1 + result.changePercent / 100) : result.price,
 });
+
+const resolveDefaultScreeningSQLTimeoutLabel = (config: FrontendAppConfig): string => {
+  const timeout = config.screening?.sqlTimeoutSeconds ?? 0;
+  if (timeout <= 0) {
+    return '不限';
+  }
+  return `${timeout} 秒`;
+};
+
+const isScreeningQueryCanceledMessage = (message: string): boolean => {
+  const normalized = message.toLowerCase();
+  return normalized.includes('context canceled') || normalized.includes('cancelled') || normalized.includes('canceled');
+};
 
 export default App;

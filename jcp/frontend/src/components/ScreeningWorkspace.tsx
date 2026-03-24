@@ -1,49 +1,44 @@
 import React from 'react';
-import { ArrowRight, Database, History, Sparkles } from 'lucide-react';
+import { ArrowRight, Sparkles, X } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
-import { ScreeningHistoryItem } from '../types';
+import { resolveScreeningPrimaryActionLabel } from '../utils/screeningSync';
 
 interface ScreeningWorkspaceProps {
   prompt: string;
   resultPreset: string;
   loading: boolean;
-  history: ScreeningHistoryItem[];
-  selectedRunId: number | null;
+  canReuseHistorySql?: boolean;
+  generatedSql: string;
+  canCancel?: boolean;
   onPromptChange: (value: string) => void;
   onResultPresetChange: (value: string) => void;
   onRun: () => void;
-  onSelectHistory: (runId: number) => void;
+  onCancel: () => void;
+  onViewSql: () => void;
 }
 
 export const ScreeningWorkspace: React.FC<ScreeningWorkspaceProps> = ({
   prompt,
   resultPreset,
   loading,
-  history,
-  selectedRunId,
+  canReuseHistorySql = false,
+  generatedSql,
+  canCancel = false,
   onPromptChange,
   onResultPresetChange,
   onRun,
-  onSelectHistory,
+  onCancel,
+  onViewSql,
 }) => {
   const { colors } = useTheme();
+  const hasGeneratedSql = generatedSql.trim().length > 0;
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="border-b fin-divider-soft px-4 py-3">
-        <div className="flex items-center gap-2">
-          <div className="rounded-full bg-accent-2/15 p-2 text-accent-2">
-            <Database className="h-4 w-4" />
-          </div>
-          <div>
-            <div className={`text-sm font-semibold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>AI 筛选工作区</div>
-            <div className={`text-xs ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>输入自然语言，生成只读 SQL 并读取本地 SQLite 数据</div>
-          </div>
+    <div className="flex h-full min-h-[230px] flex-col justify-end">
+      <div className="px-4 pb-4 pt-3">
+        <div className={`mb-3 text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+          输入自然语言，描述筛选方式
         </div>
-      </div>
-
-      <div className="border-b fin-divider-soft px-4 py-4">
-        <label className={`mb-2 block text-xs font-medium ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>筛选条件</label>
         <textarea
           value={prompt}
           onChange={(event) => onPromptChange(event.target.value)}
@@ -51,11 +46,11 @@ export const ScreeningWorkspace: React.FC<ScreeningWorkspaceProps> = ({
           className={`min-h-[96px] w-full resize-none rounded-xl border px-3 py-3 text-sm fin-input ${colors.isDark ? 'placeholder-slate-500' : 'placeholder-slate-400'}`}
         />
 
-        <div className="mt-3 flex items-center gap-3">
+        <div className="mt-4 flex flex-wrap items-stretch gap-3">
           <select
             value={resultPreset}
             onChange={(event) => onResultPresetChange(event.target.value)}
-            className={`rounded-lg border px-3 py-2 text-sm fin-input ${colors.isDark ? 'text-slate-200' : 'text-slate-700'}`}
+            className={`w-[132px] flex-none rounded-xl border px-3 py-2.5 text-sm fin-input ${colors.isDark ? 'text-slate-200' : 'text-slate-700'}`}
           >
             <option value="50">前 50 条</option>
             <option value="100">前 100 条</option>
@@ -63,49 +58,50 @@ export const ScreeningWorkspace: React.FC<ScreeningWorkspaceProps> = ({
             <option value="unlimited">不限</option>
           </select>
 
-          <button
-            onClick={onRun}
-            disabled={loading || !prompt.trim()}
-            className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {loading ? <Sparkles className="h-4 w-4 animate-pulse" /> : <ArrowRight className="h-4 w-4" />}
-            {loading ? '筛选中...' : '重新筛选'}
-          </button>
+          <div className="flex min-w-[220px] flex-1 flex-wrap justify-end gap-3">
+            {loading && canCancel && (
+              <button
+                type="button"
+                onClick={onCancel}
+                className={`inline-flex flex-1 items-center justify-center gap-2 rounded-2xl border px-5 py-3 text-sm font-semibold transition-colors ${
+                  colors.isDark
+                    ? 'border-slate-600 bg-slate-900/60 text-slate-200 hover:border-red-400/40 hover:text-white'
+                    : 'border-slate-300 bg-white/90 text-slate-600 hover:border-red-300 hover:text-slate-900'
+                }`}
+              >
+                <X className="h-4 w-4" />
+                取消筛选
+              </button>
+            )}
+            <button
+              onClick={onRun}
+              disabled={loading || !prompt.trim()}
+              className="inline-flex min-w-[188px] flex-1 items-center justify-center gap-2 rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-white transition-all hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loading ? <Sparkles className="h-4 w-4 animate-pulse" /> : <ArrowRight className="h-4 w-4" />}
+              {resolveScreeningPrimaryActionLabel({
+                loading,
+                canReuseHistorySql,
+              })}
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-3">
-          <History className="h-4 w-4 text-accent-2" />
-          <span className={`text-sm font-semibold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>历史筛选记录</span>
-        </div>
-
-        <div className="h-full overflow-y-auto fin-scrollbar pb-4">
-          {history.length === 0 ? (
-            <div className={`px-4 text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>还没有历史筛选记录。</div>
-          ) : (
-            history.map((item) => {
-              const isActive = item.runId === selectedRunId;
-              return (
-                <button
-                  key={item.runId}
-                  onClick={() => onSelectHistory(item.runId)}
-                  className={`mx-3 mb-2 block w-[calc(100%-24px)] rounded-xl border px-3 py-3 text-left transition-colors ${
-                    isActive
-                      ? 'border-accent/40 bg-accent/10'
-                      : `${colors.isDark ? 'border-slate-700 bg-slate-900/40 hover:border-slate-600 hover:bg-slate-800/40' : 'border-slate-200 bg-white/80 hover:border-slate-300 hover:bg-slate-50'}`
-                  }`}
-                >
-                  <div className={`line-clamp-2 text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>{item.prompt}</div>
-                  <div className={`mt-2 flex items-center justify-between text-[11px] ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                    <span>{item.createdAt}</span>
-                    <span>命中 {item.matchedCount} 条</span>
-                  </div>
-                </button>
-              );
-            })
-          )}
-        </div>
+        {hasGeneratedSql && (
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={onViewSql}
+              className={`rounded-xl border px-4 py-2 text-sm font-medium transition-colors ${
+                colors.isDark
+                  ? 'border-slate-700 bg-slate-900/40 text-slate-300 hover:border-accent/40 hover:text-accent-2'
+                  : 'border-slate-300 bg-white/90 text-slate-600 hover:border-accent/40 hover:text-accent-2'
+              }`}
+            >
+              查看 SQL
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

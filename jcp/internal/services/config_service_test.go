@@ -44,6 +44,7 @@ func TestConfigServiceAddsScreeningDefaultsForLegacyConfig(t *testing.T) {
 		"autoSyncEnabled":    false,
 		"autoSyncTime":       "18:00",
 		"defaultResultLimit": float64(100),
+		"sqlTimeoutSeconds":  float64(0),
 	})
 }
 
@@ -108,6 +109,7 @@ func TestConfigServicePreservesScreeningConfigAcrossReload(t *testing.T) {
 		"autoSyncEnabled":    false,
 		"autoSyncTime":       "19:30",
 		"defaultResultLimit": float64(200),
+		"sqlTimeoutSeconds":  float64(0),
 	})
 }
 

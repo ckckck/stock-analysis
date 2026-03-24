@@ -1,7 +1,9 @@
-import { GetScreeningHistoryRun, ListScreeningHistory, RunScreeningQuery } from '@wailsjs/go/main/App';
+import { EventsOff, EventsOn } from '@wailsjs/runtime/runtime';
+import { CancelScreeningQuery, GetScreeningHistoryRun, ListScreeningHistory, RerunScreeningHistoryRun, RunScreeningQuery } from '@wailsjs/go/main/App';
 import type {
   ScreeningHistoryItem,
   ScreeningHistoryResponse,
+  ScreeningQueryProgress,
   ScreeningQueryRequest,
   ScreeningQueryResponse,
 } from '../types';
@@ -28,6 +30,25 @@ export const getScreeningHistoryRun = async (runId: number, page = 1, pageSize =
     throw new Error(response.error);
   }
   return response;
+};
+
+export const rerunScreeningHistoryRun = async (runId: number, page = 1, pageSize = 200): Promise<ScreeningQueryResponse> => {
+  const response = normalizeScreeningQueryResponse(await RerunScreeningHistoryRun(runId, page, pageSize));
+  if (response.error) {
+    throw new Error(response.error);
+  }
+  return response;
+};
+
+export const cancelScreeningQuery = async (): Promise<boolean> => {
+  return await CancelScreeningQuery();
+};
+
+export const onScreeningQueryProgress = (callback: (progress: ScreeningQueryProgress) => void): (() => void) => {
+  EventsOn('screening:query:progress', (raw: any) => {
+    callback(normalizeScreeningQueryProgress(raw));
+  });
+  return () => EventsOff('screening:query:progress');
 };
 
 const normalizeScreeningQueryResponse = (raw: any): ScreeningQueryResponse => ({
@@ -58,4 +79,23 @@ const normalizeScreeningRunResult = (raw: any) => ({
   changePercent: raw?.changePercent ?? raw?.ChangePercent ?? 0,
   volume: raw?.volume ?? raw?.Volume ?? 0,
   amount: raw?.amount ?? raw?.Amount ?? 0,
+});
+
+const normalizeScreeningQueryProgress = (raw: any): ScreeningQueryProgress => ({
+  runStatus: raw?.runStatus ?? raw?.RunStatus ?? '',
+  currentStage: raw?.currentStage ?? raw?.CurrentStage ?? '',
+  progressPercent: raw?.progressPercent ?? raw?.ProgressPercent ?? 0,
+  message: raw?.message ?? raw?.Message ?? '',
+  streamingText: raw?.streamingText ?? raw?.StreamingText ?? '',
+  prompt: raw?.prompt ?? raw?.Prompt ?? '',
+  universeCount: raw?.universeCount ?? raw?.UniverseCount,
+  error: raw?.error ?? raw?.Error,
+  logs: Array.isArray(raw?.logs ?? raw?.Logs)
+    ? (raw.logs ?? raw.Logs).map((entry: any) => ({
+        time: entry?.time ?? entry?.Time ?? '',
+        stage: entry?.stage ?? entry?.Stage ?? '',
+        status: entry?.status ?? entry?.Status ?? '',
+        message: entry?.message ?? entry?.Message ?? '',
+      }))
+    : [],
 });

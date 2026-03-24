@@ -43,6 +43,40 @@ func (g *screeningSQLGeneratorAdapter) GenerateSQL(ctx context.Context, prompt s
 	return g.modelFactory.GenerateText(ctx, aiConfig, prompt)
 }
 
+func (g *screeningSQLGeneratorAdapter) GenerateSQLStream(
+	ctx context.Context,
+	prompt string,
+	aiConfigID string,
+	onDelta func(string),
+) (string, error) {
+	if g == nil || g.configService == nil || g.modelFactory == nil {
+		return "", fmt.Errorf("screening sql generator unavailable")
+	}
+
+	aiConfig := resolveAppAIConfig(g.configService.GetConfig(), aiConfigID)
+	if aiConfig == nil {
+		return "", fmt.Errorf("未配置AI服务")
+	}
+	return g.modelFactory.GenerateTextStream(ctx, aiConfig, prompt, onDelta)
+}
+
+func (g *screeningSQLGeneratorAdapter) GenerateReasoningStream(
+	ctx context.Context,
+	prompt string,
+	aiConfigID string,
+	onDelta func(string),
+) (string, error) {
+	if g == nil || g.configService == nil || g.modelFactory == nil {
+		return "", fmt.Errorf("screening sql generator unavailable")
+	}
+
+	aiConfig := resolveAppAIConfig(g.configService.GetConfig(), aiConfigID)
+	if aiConfig == nil {
+		return "", fmt.Errorf("未配置AI服务")
+	}
+	return g.modelFactory.GenerateTextStream(ctx, aiConfig, prompt, onDelta)
+}
+
 func resolveAppAIConfig(config *models.AppConfig, aiConfigID string) *models.AIConfig {
 	if config == nil {
 		return nil
@@ -94,8 +128,11 @@ type App struct {
 	openClawServer     *openclaw.Server
 
 	// 会议取消管理
-	meetingCancels   map[string]context.CancelFunc
-	meetingCancelsMu sync.RWMutex
+	meetingCancels         map[string]context.CancelFunc
+	meetingCancelsMu       sync.RWMutex
+	screeningQueryCancel   context.CancelFunc
+	screeningQueryCancelMu sync.Mutex
+	screeningQueryToken    uint64
 }
 
 // NewApp creates a new App application struct
@@ -303,6 +340,9 @@ func (a *App) startup(ctx context.Context) {
 // shutdown 应用关闭时调用
 func (a *App) shutdown(ctx context.Context) {
 	log.Info("应用正在关闭...")
+	if a.screeningSync != nil {
+		a.screeningSync.Cancel()
+	}
 	if a.openClawServer != nil {
 		a.openClawServer.Stop()
 	}
@@ -368,16 +408,86 @@ func (a *App) UpdateConfig(config *models.AppConfig) string {
 }
 
 // RunScreeningSync 手动执行 AI 筛选数据库同步。
-func (a *App) RunScreeningSync() *services.ScreeningSyncStatus {
+func (a *App) RunScreeningSync(options services.ScreeningSyncRunOptions) *services.ScreeningSyncStatus {
 	if a.screeningSync == nil {
 		return &services.ScreeningSyncStatus{Error: "screening sync service unavailable"}
 	}
 
-	status, err := a.screeningSync.Sync()
-	if err != nil {
-		return &services.ScreeningSyncStatus{Error: err.Error()}
+	log.Info("run screening sync: mode=%s limit=%d", options.Mode, options.LimitStocks)
+	parentCtx := context.Background()
+	if a.ctx != nil {
+		parentCtx = a.ctx
 	}
+
+	status, err := a.screeningSync.SyncWithOptions(parentCtx, options, func(progress services.ScreeningSyncProgress) {
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "screening:sync:progress", progress)
+		}
+	})
+	if err != nil {
+		log.Error("run screening sync failed: mode=%s limit=%d err=%v", options.Mode, options.LimitStocks, err)
+		if status == nil {
+			return &services.ScreeningSyncStatus{Error: err.Error()}
+		}
+		if status.Error == "" {
+			status.Error = err.Error()
+		}
+		return status
+	}
+	log.Info(
+		"run screening sync finished: mode=%s limit=%d runStatus=%s completed=%d total=%d err=%s",
+		options.Mode,
+		options.LimitStocks,
+		status.RunStatus,
+		status.CompletedStocks,
+		status.TotalStocks,
+		status.Error,
+	)
 	return status
+}
+
+// CancelScreeningSync 取消当前 AI 筛选同步任务。
+func (a *App) CancelScreeningSync() bool {
+	if a.screeningSync == nil {
+		return false
+	}
+	canceled := a.screeningSync.Cancel()
+	log.Info("cancel screening sync: canceled=%t", canceled)
+	return canceled
+}
+
+func (a *App) setScreeningQueryCancel(cancel context.CancelFunc) uint64 {
+	a.screeningQueryCancelMu.Lock()
+	a.screeningQueryToken++
+	a.screeningQueryCancel = cancel
+	token := a.screeningQueryToken
+	a.screeningQueryCancelMu.Unlock()
+	return token
+}
+
+func (a *App) clearScreeningQueryCancel(token uint64) {
+	a.screeningQueryCancelMu.Lock()
+	if token != 0 && a.screeningQueryToken == token {
+		a.screeningQueryCancel = nil
+	}
+	a.screeningQueryCancelMu.Unlock()
+}
+
+func (a *App) cancelScreeningQueryInternal() bool {
+	a.screeningQueryCancelMu.Lock()
+	cancel := a.screeningQueryCancel
+	a.screeningQueryCancel = nil
+	a.screeningQueryCancelMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	return true
+}
+
+// CancelScreeningQuery 取消当前 AI 筛选请求。
+func (a *App) CancelScreeningQuery() bool {
+	return a.cancelScreeningQueryInternal()
 }
 
 // GetScreeningSyncStatus 获取 AI 筛选同步状态。
@@ -393,13 +503,36 @@ func (a *App) GetScreeningSyncStatus() *services.ScreeningSyncStatus {
 	return status
 }
 
+// GetScreeningUniverseSymbols 获取当前筛选股票池中可用于 AI 筛选的股票代码。
+func (a *App) GetScreeningUniverseSymbols(limit int) []string {
+	if a.screeningSync == nil {
+		return []string{}
+	}
+
+	symbols, err := a.screeningSync.ListScreeningUniverseSymbols(limit)
+	if err != nil {
+		log.Warn("get screening universe symbols error: %v", err)
+		return []string{}
+	}
+	return symbols
+}
+
 // RunScreeningQuery 执行 AI 筛选。
 func (a *App) RunScreeningQuery(req services.ScreeningQueryRequest) *services.ScreeningQueryResponse {
 	if a.screeningQuery == nil {
 		return &services.ScreeningQueryResponse{Error: "screening query service unavailable"}
 	}
 
-	response, err := a.screeningQuery.Run(context.Background(), req)
+	a.cancelScreeningQueryInternal()
+	queryCtx, cancel := context.WithCancel(context.Background())
+	token := a.setScreeningQueryCancel(cancel)
+	defer a.clearScreeningQueryCancel(token)
+
+	response, err := a.screeningQuery.RunWithProgress(queryCtx, req, func(progress services.ScreeningQueryProgress) {
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "screening:query:progress", progress)
+		}
+	})
 	if err != nil {
 		return &services.ScreeningQueryResponse{Error: err.Error()}
 	}
@@ -426,6 +559,28 @@ func (a *App) GetScreeningHistoryRun(runID int64, page int, pageSize int) *servi
 	}
 
 	response, err := a.screeningQuery.GetRun(runID, page, pageSize)
+	if err != nil {
+		return &services.ScreeningQueryResponse{Error: err.Error()}
+	}
+	return response
+}
+
+// RerunScreeningHistoryRun 基于历史 SQL 重新执行一次筛选，并生成新的历史记录。
+func (a *App) RerunScreeningHistoryRun(runID int64, page int, pageSize int) *services.ScreeningQueryResponse {
+	if a.screeningQuery == nil {
+		return &services.ScreeningQueryResponse{Error: "screening query service unavailable"}
+	}
+
+	a.cancelScreeningQueryInternal()
+	queryCtx, cancel := context.WithCancel(context.Background())
+	token := a.setScreeningQueryCancel(cancel)
+	defer a.clearScreeningQueryCancel(token)
+
+	response, err := a.screeningQuery.RerunHistoryRunWithContext(queryCtx, runID, page, pageSize, func(progress services.ScreeningQueryProgress) {
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "screening:query:progress", progress)
+		}
+	})
 	if err != nil {
 		return &services.ScreeningQueryResponse{Error: err.Error()}
 	}

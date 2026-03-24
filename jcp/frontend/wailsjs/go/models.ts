@@ -1,5 +1,5 @@
 export namespace hottrend {
-
+	
 	export class HotItem {
 	    id: string;
 	    title: string;
@@ -8,11 +8,11 @@ export namespace hottrend {
 	    rank: number;
 	    platform: string;
 	    extra: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new HotItem(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -32,11 +32,11 @@ export namespace hottrend {
 	    updated_at: any;
 	    from_cache: boolean;
 	    error: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new HotTrendResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.platform = source["platform"];
@@ -46,7 +46,7 @@ export namespace hottrend {
 	        this.from_cache = source["from_cache"];
 	        this.error = source["error"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -69,11 +69,11 @@ export namespace hottrend {
 	    ID: string;
 	    Name: string;
 	    HomeURL: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new PlatformInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -85,16 +85,16 @@ export namespace hottrend {
 }
 
 export namespace main {
-
+	
 	export class EnhancePromptRequest {
 	    originalPrompt: string;
 	    agentRole: string;
 	    agentName: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new EnhancePromptRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.originalPrompt = source["originalPrompt"];
@@ -106,11 +106,11 @@ export namespace main {
 	    success: boolean;
 	    enhancedPrompt?: string;
 	    error?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new EnhancePromptResponse(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
@@ -120,11 +120,11 @@ export namespace main {
 	}
 	export class GenerateStrategyRequest {
 	    prompt: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new GenerateStrategyRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.prompt = source["prompt"];
@@ -135,11 +135,11 @@ export namespace main {
 	    error?: string;
 	    strategy?: models.Strategy;
 	    reasoning?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new GenerateStrategyResponse(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
@@ -147,7 +147,7 @@ export namespace main {
 	        this.strategy = this.convertValues(source["strategy"], models.Strategy);
 	        this.reasoning = source["reasoning"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -172,11 +172,11 @@ export namespace main {
 	    mentionIds: string[];
 	    replyToId: string;
 	    replyContent: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new MeetingMessageRequest(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.stockCode = source["stockCode"];
@@ -190,16 +190,16 @@ export namespace main {
 }
 
 export namespace mcp {
-
+	
 	export class ServerStatus {
 	    id: string;
 	    connected: boolean;
 	    error: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ServerStatus(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -212,11 +212,11 @@ export namespace mcp {
 	    description: string;
 	    serverId: string;
 	    serverName: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ToolInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -229,7 +229,7 @@ export namespace mcp {
 }
 
 export namespace models {
-
+	
 	export class AIConfig {
 	    id: string;
 	    name: string;
@@ -246,11 +246,11 @@ export namespace models {
 	    project: string;
 	    location: string;
 	    credentialsJson: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new AIConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -281,11 +281,11 @@ export namespace models {
 	    mcpServers: string[];
 	    enabled: boolean;
 	    aiConfigId: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new AgentConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -300,16 +300,78 @@ export namespace models {
 	        this.aiConfigId = source["aiConfigId"];
 	    }
 	}
+	export class ScreeningMarketScopeConfig {
+	    shanghai: boolean;
+	    shenzhen: boolean;
+	    beijing: boolean;
+	    indices: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScreeningMarketScopeConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.shanghai = source["shanghai"];
+	        this.shenzhen = source["shenzhen"];
+	        this.beijing = source["beijing"];
+	        this.indices = source["indices"];
+	    }
+	}
+	export class ScreeningConfig {
+	    markets: ScreeningMarketScopeConfig;
+	    initialSyncDays: number;
+	    retentionMode: string;
+	    retentionDays: number;
+	    autoSyncEnabled: boolean;
+	    autoSyncTime: string;
+	    defaultResultLimit: number;
+	    sqlTimeoutSeconds: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScreeningConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.markets = this.convertValues(source["markets"], ScreeningMarketScopeConfig);
+	        this.initialSyncDays = source["initialSyncDays"];
+	        this.retentionMode = source["retentionMode"];
+	        this.retentionDays = source["retentionDays"];
+	        this.autoSyncEnabled = source["autoSyncEnabled"];
+	        this.autoSyncTime = source["autoSyncTime"];
+	        this.defaultResultLimit = source["defaultResultLimit"];
+	        this.sqlTimeoutSeconds = source["sqlTimeoutSeconds"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class KDJConfig {
 	    enabled: boolean;
 	    period: number;
 	    k: number;
 	    d: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new KDJConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -321,11 +383,11 @@ export namespace models {
 	export class RSIConfig {
 	    enabled: boolean;
 	    period: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new RSIConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -337,11 +399,11 @@ export namespace models {
 	    fast: number;
 	    slow: number;
 	    signal: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new MACDConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -354,11 +416,11 @@ export namespace models {
 	    enabled: boolean;
 	    period: number;
 	    multiplier: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new BOLLConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -369,11 +431,11 @@ export namespace models {
 	export class EMAConfig {
 	    enabled: boolean;
 	    periods: number[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new EMAConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -383,11 +445,11 @@ export namespace models {
 	export class MAConfig {
 	    enabled: boolean;
 	    periods: number[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new MAConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -401,11 +463,11 @@ export namespace models {
 	    macd: MACDConfig;
 	    rsi: RSIConfig;
 	    kdj: KDJConfig;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new IndicatorConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ma = this.convertValues(source["ma"], MAConfig);
@@ -415,7 +477,7 @@ export namespace models {
 	        this.rsi = this.convertValues(source["rsi"], RSIConfig);
 	        this.kdj = this.convertValues(source["kdj"], KDJConfig);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -438,11 +500,11 @@ export namespace models {
 	    enabled: boolean;
 	    port: number;
 	    apiKey: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new OpenClawConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -456,11 +518,11 @@ export namespace models {
 	    bottomPanelHeight: number;
 	    windowWidth: number;
 	    windowHeight: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new LayoutConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.leftPanelWidth = source["leftPanelWidth"];
@@ -473,11 +535,11 @@ export namespace models {
 	export class ProxyConfig {
 	    mode: string;
 	    customUrl: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ProxyConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mode = source["mode"];
@@ -491,11 +553,11 @@ export namespace models {
 	    maxKeyFacts: number;
 	    maxSummaryLength: number;
 	    compressThreshold: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new MemoryConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -515,11 +577,11 @@ export namespace models {
 	    args: string[];
 	    toolFilter: string[];
 	    enabled: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new MCPServerConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -531,66 +593,6 @@ export namespace models {
 	        this.toolFilter = source["toolFilter"];
 	        this.enabled = source["enabled"];
 	    }
-	}
-	export class ScreeningMarketScopeConfig {
-	    shanghai: boolean;
-	    shenzhen: boolean;
-	    beijing: boolean;
-	    indices: boolean;
-
-	    static createFrom(source: any = {}) {
-	        return new ScreeningMarketScopeConfig(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.shanghai = source["shanghai"];
-	        this.shenzhen = source["shenzhen"];
-	        this.beijing = source["beijing"];
-	        this.indices = source["indices"];
-	    }
-	}
-	export class ScreeningConfig {
-	    markets: ScreeningMarketScopeConfig;
-	    initialSyncDays: number;
-	    retentionMode: string;
-	    retentionDays: number;
-	    autoSyncEnabled: boolean;
-	    autoSyncTime: string;
-	    defaultResultLimit: number;
-
-	    static createFrom(source: any = {}) {
-	        return new ScreeningConfig(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.markets = this.convertValues(source["markets"], ScreeningMarketScopeConfig);
-	        this.initialSyncDays = source["initialSyncDays"];
-	        this.retentionMode = source["retentionMode"];
-	        this.retentionDays = source["retentionDays"];
-	        this.autoSyncEnabled = source["autoSyncEnabled"];
-	        this.autoSyncTime = source["autoSyncTime"];
-	        this.defaultResultLimit = source["defaultResultLimit"];
-	    }
-
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
 	}
 	export class AppConfig {
 	    theme: string;
@@ -606,11 +608,11 @@ export namespace models {
 	    openClaw: OpenClawConfig;
 	    indicators: IndicatorConfig;
 	    screening: ScreeningConfig;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.theme = source["theme"];
@@ -627,7 +629,7 @@ export namespace models {
 	        this.indicators = this.convertValues(source["indicators"], IndicatorConfig);
 	        this.screening = this.convertValues(source["screening"], ScreeningConfig);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -646,7 +648,7 @@ export namespace models {
 		    return a;
 		}
 	}
-
+	
 	export class ChatMessage {
 	    id: string;
 	    agentId: string;
@@ -660,11 +662,11 @@ export namespace models {
 	    msgType?: string;
 	    error?: string;
 	    meetingMode?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ChatMessage(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -681,9 +683,9 @@ export namespace models {
 	        this.meetingMode = source["meetingMode"];
 	    }
 	}
-
-
-
+	
+	
+	
 	export class KLineData {
 	    time: string;
 	    open: number;
@@ -696,11 +698,11 @@ export namespace models {
 	    ma5?: number;
 	    ma10?: number;
 	    ma20?: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new KLineData(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.time = source["time"];
@@ -716,7 +718,7 @@ export namespace models {
 	        this.ma20 = source["ma20"];
 	    }
 	}
-
+	
 	export class LongHuBangDetail {
 	    rank: number;
 	    operName: string;
@@ -726,11 +728,11 @@ export namespace models {
 	    sellPercent: number;
 	    netAmt: number;
 	    direction: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new LongHuBangDetail(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.rank = source["rank"];
@@ -766,11 +768,11 @@ export namespace models {
 	    d5Change: number;
 	    d10Change: number;
 	    securityType: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new LongHuBangItem(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.tradeDate = source["tradeDate"];
@@ -797,21 +799,21 @@ export namespace models {
 	        this.securityType = source["securityType"];
 	    }
 	}
-
-
-
-
-
+	
+	
+	
+	
+	
 	export class OrderBookItem {
 	    price: number;
 	    size: number;
 	    total: number;
 	    percent: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new OrderBookItem(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.price = source["price"];
@@ -823,17 +825,17 @@ export namespace models {
 	export class OrderBook {
 	    bids: OrderBookItem[];
 	    asks: OrderBookItem[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new OrderBook(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.bids = this.convertValues(source["bids"], OrderBookItem);
 	        this.asks = this.convertValues(source["asks"], OrderBookItem);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -852,9 +854,11 @@ export namespace models {
 		    return a;
 		}
 	}
-
-
-
+	
+	
+	
+	
+	
 	export class Stock {
 	    symbol: string;
 	    name: string;
@@ -869,11 +873,11 @@ export namespace models {
 	    high: number;
 	    low: number;
 	    preClose: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Stock(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.symbol = source["symbol"];
@@ -894,11 +898,11 @@ export namespace models {
 	export class StockPosition {
 	    shares: number;
 	    costPrice: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StockPosition(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.shares = source["shares"];
@@ -913,11 +917,11 @@ export namespace models {
 	    position?: StockPosition;
 	    createdAt: number;
 	    updatedAt: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StockSession(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -928,7 +932,7 @@ export namespace models {
 	        this.createdAt = source["createdAt"];
 	        this.updatedAt = source["updatedAt"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -958,11 +962,11 @@ export namespace models {
 	    mcpServers: string[];
 	    enabled: boolean;
 	    aiConfigId: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StrategyAgent(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -987,11 +991,11 @@ export namespace models {
 	    source: string;
 	    sourceMeta: string;
 	    createdAt: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Strategy(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -1004,7 +1008,7 @@ export namespace models {
 	        this.sourceMeta = source["sourceMeta"];
 	        this.createdAt = source["createdAt"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1027,21 +1031,310 @@ export namespace models {
 }
 
 export namespace services {
-
+	
 	export class LongHuBangListResult {
 	    items: models.LongHuBangItem[];
 	    total: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new LongHuBangListResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.items = this.convertValues(source["items"], models.LongHuBangItem);
 	        this.total = source["total"];
 	    }
-
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ScreeningHistoryItem {
+	    runId: number;
+	    prompt: string;
+	    marketScope: string;
+	    resultMode: string;
+	    resultLimit: number;
+	    matchedCount: number;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScreeningHistoryItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runId = source["runId"];
+	        this.prompt = source["prompt"];
+	        this.marketScope = source["marketScope"];
+	        this.resultMode = source["resultMode"];
+	        this.resultLimit = source["resultLimit"];
+	        this.matchedCount = source["matchedCount"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class ScreeningHistoryResponse {
+	    items: ScreeningHistoryItem[];
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScreeningHistoryResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], ScreeningHistoryItem);
+	        this.error = source["error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ScreeningQueryRequest {
+	    prompt: string;
+	    aiConfigId?: string;
+	    resultMode: string;
+	    resultLimit: number;
+	    page: number;
+	    pageSize: number;
+	    universeSymbols?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ScreeningQueryRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prompt = source["prompt"];
+	        this.aiConfigId = source["aiConfigId"];
+	        this.resultMode = source["resultMode"];
+	        this.resultLimit = source["resultLimit"];
+	        this.page = source["page"];
+	        this.pageSize = source["pageSize"];
+	        this.universeSymbols = source["universeSymbols"];
+	    }
+	}
+	export class ScreeningRunResult {
+	    RunID: number;
+	    Symbol: string;
+	    Name: string;
+	    Rank: number;
+	    Score: number;
+	    SnapshotTradeDate: string;
+	    Price: number;
+	    ChangePercent: number;
+	    Volume: number;
+	    Amount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScreeningRunResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.RunID = source["RunID"];
+	        this.Symbol = source["Symbol"];
+	        this.Name = source["Name"];
+	        this.Rank = source["Rank"];
+	        this.Score = source["Score"];
+	        this.SnapshotTradeDate = source["SnapshotTradeDate"];
+	        this.Price = source["Price"];
+	        this.ChangePercent = source["ChangePercent"];
+	        this.Volume = source["Volume"];
+	        this.Amount = source["Amount"];
+	    }
+	}
+	export class ScreeningQueryResponse {
+	    runId: number;
+	    prompt?: string;
+	    marketScope: string;
+	    resultMode: string;
+	    resultLimit: number;
+	    generatedSql: string;
+	    totalCount: number;
+	    page: number;
+	    pageSize: number;
+	    createdAt?: string;
+	    results: ScreeningRunResult[];
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScreeningQueryResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runId = source["runId"];
+	        this.prompt = source["prompt"];
+	        this.marketScope = source["marketScope"];
+	        this.resultMode = source["resultMode"];
+	        this.resultLimit = source["resultLimit"];
+	        this.generatedSql = source["generatedSql"];
+	        this.totalCount = source["totalCount"];
+	        this.page = source["page"];
+	        this.pageSize = source["pageSize"];
+	        this.createdAt = source["createdAt"];
+	        this.results = this.convertValues(source["results"], ScreeningRunResult);
+	        this.error = source["error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class ScreeningSyncEvent {
+	    time: string;
+	    symbol: string;
+	    name: string;
+	    source: string;
+	    status: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScreeningSyncEvent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.time = source["time"];
+	        this.symbol = source["symbol"];
+	        this.name = source["name"];
+	        this.source = source["source"];
+	        this.status = source["status"];
+	        this.message = source["message"];
+	    }
+	}
+	export class ScreeningSyncRunOptions {
+	    mode: string;
+	    limitStocks: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScreeningSyncRunOptions(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.limitStocks = source["limitStocks"];
+	    }
+	}
+	export class ScreeningSyncStatus {
+	    marketScope: string;
+	    initialSyncDays: number;
+	    retentionMode: string;
+	    retentionDays: number;
+	    lastTradeDate: string;
+	    lastSyncedAt: string;
+	    targetTradeDate?: string;
+	    latestSyncedTradeDate?: string;
+	    stocksSynced: number;
+	    barsSynced: number;
+	    snapshotsSynced: number;
+	    storedStocks?: number;
+	    storedBars?: number;
+	    storedSnapshots?: number;
+	    marketStockCount?: number;
+	    syncedToLatestStocks?: number;
+	    pendingSyncStocks?: number;
+	    runStatus?: string;
+	    progressPercent?: number;
+	    totalStocks?: number;
+	    completedStocks?: number;
+	    currentSymbol?: string;
+	    currentName?: string;
+	    currentStage?: string;
+	    activeSource?: string;
+	    lastMessage?: string;
+	    limitStocks?: number;
+	    resumeFromCheckpoint?: boolean;
+	    syncedSymbols?: string[];
+	    events?: ScreeningSyncEvent[];
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScreeningSyncStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.marketScope = source["marketScope"];
+	        this.initialSyncDays = source["initialSyncDays"];
+	        this.retentionMode = source["retentionMode"];
+	        this.retentionDays = source["retentionDays"];
+	        this.lastTradeDate = source["lastTradeDate"];
+	        this.lastSyncedAt = source["lastSyncedAt"];
+	        this.targetTradeDate = source["targetTradeDate"];
+	        this.latestSyncedTradeDate = source["latestSyncedTradeDate"];
+	        this.stocksSynced = source["stocksSynced"];
+	        this.barsSynced = source["barsSynced"];
+	        this.snapshotsSynced = source["snapshotsSynced"];
+	        this.storedStocks = source["storedStocks"];
+	        this.storedBars = source["storedBars"];
+	        this.storedSnapshots = source["storedSnapshots"];
+	        this.marketStockCount = source["marketStockCount"];
+	        this.syncedToLatestStocks = source["syncedToLatestStocks"];
+	        this.pendingSyncStocks = source["pendingSyncStocks"];
+	        this.runStatus = source["runStatus"];
+	        this.progressPercent = source["progressPercent"];
+	        this.totalStocks = source["totalStocks"];
+	        this.completedStocks = source["completedStocks"];
+	        this.currentSymbol = source["currentSymbol"];
+	        this.currentName = source["currentName"];
+	        this.currentStage = source["currentStage"];
+	        this.activeSource = source["activeSource"];
+	        this.lastMessage = source["lastMessage"];
+	        this.limitStocks = source["limitStocks"];
+	        this.resumeFromCheckpoint = source["resumeFromCheckpoint"];
+	        this.syncedSymbols = source["syncedSymbols"];
+	        this.events = this.convertValues(source["events"], ScreeningSyncEvent);
+	        this.error = source["error"];
+	    }
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1065,11 +1358,11 @@ export namespace services {
 	    name: string;
 	    industry: string;
 	    market: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new StockSearchResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.symbol = source["symbol"];
@@ -1082,11 +1375,11 @@ export namespace services {
 	    time: string;
 	    content: string;
 	    url: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Telegraph(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.time = source["time"];
@@ -1099,11 +1392,11 @@ export namespace services {
 	    text: string;
 	    startTime: string;
 	    endTime: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TradingPeriod(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.status = source["status"];
@@ -1116,18 +1409,18 @@ export namespace services {
 	    isTradeDay: boolean;
 	    holidayName: string;
 	    periods: TradingPeriod[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new TradingSchedule(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.isTradeDay = source["isTradeDay"];
 	        this.holidayName = source["holidayName"];
 	        this.periods = this.convertValues(source["periods"], TradingPeriod);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1153,11 +1446,11 @@ export namespace services {
 	    releaseUrl: string;
 	    releaseNotes: string;
 	    error?: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new UpdateInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.hasUpdate = source["hasUpdate"];
@@ -1172,15 +1465,15 @@ export namespace services {
 }
 
 export namespace tools {
-
+	
 	export class ToolInfo {
 	    name: string;
 	    description: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ToolInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -1189,3 +1482,4 @@ export namespace tools {
 	}
 
 }
+

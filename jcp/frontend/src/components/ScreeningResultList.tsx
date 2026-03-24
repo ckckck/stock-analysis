@@ -1,54 +1,216 @@
 import React from 'react';
-import { Check, ChevronRight, Plus, Sparkles } from 'lucide-react';
+import { Check, CheckCircle2, ChevronRight, CircleDashed, History, Loader2, Plus } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useCandleColor } from '../contexts/CandleColorContext';
-import { ScreeningRunResult, Stock } from '../types';
+import { ScreeningHistoryItem, ScreeningQueryProgress, ScreeningResultTab, ScreeningRunResult, Stock } from '../types';
+import { formatDateTimeDisplay } from '../utils/datetime';
 
 interface ScreeningResultListProps {
+  activeTab: ScreeningResultTab;
   results: ScreeningRunResult[];
+  history: ScreeningHistoryItem[];
+  generatedSql: string;
   selectedSymbol: string;
+  selectedHistoryRunId: number | null;
   totalCount: number;
   isLoading: boolean;
+  queryProgress?: ScreeningQueryProgress | null;
   error: string;
   watchlistSymbols: Set<string>;
+  onTabChange: (tab: ScreeningResultTab) => void;
+  onSelectHistory: (runId: number) => void;
   onSelect: (symbol: string) => void;
   onAddToWatchlist: (stock: Stock) => void;
 }
 
 export const ScreeningResultList: React.FC<ScreeningResultListProps> = ({
+  activeTab,
   results,
+  history,
+  generatedSql,
   selectedSymbol,
+  selectedHistoryRunId,
   totalCount,
   isLoading,
+  queryProgress,
   error,
   watchlistSymbols,
+  onTabChange,
+  onSelectHistory,
   onSelect,
   onAddToWatchlist,
 }) => {
   const { colors } = useTheme();
   const cc = useCandleColor();
+  const progressPercent = Math.max(0, Math.min(100, Math.round(queryProgress?.progressPercent || 0)));
+  const streamingSQL = queryProgress?.streamingText?.trim() || '';
+  const isCanceled = queryProgress?.runStatus === 'canceled';
+  const hasCompletedEmptyCurrentRun = activeTab === 'current' && results.length === 0 && generatedSql.trim().length > 0;
+  const shouldShowProgressCard = isLoading || isCanceled;
+  const orderedProgressSteps = buildOrderedQueryProgressSteps(queryProgress, streamingSQL);
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b fin-divider-soft px-4 py-3">
-        <div className="flex items-center gap-2">
-          <div className="rounded-full bg-accent/15 p-2 text-accent-2">
-            <Sparkles className="h-4 w-4" />
+      <div className="border-b fin-divider-soft px-4 pb-3 pt-7">
+        <div className="flex justify-center">
+          <div className={`inline-flex rounded-full border p-1 ${colors.isDark ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-slate-100/70'}`}>
+            <button
+              type="button"
+              onClick={() => onTabChange('current')}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+                activeTab === 'current'
+                  ? 'bg-accent text-white'
+                  : `${colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'}`
+              }`}
+            >
+              当前筛选结果
+            </button>
+            <button
+              type="button"
+              onClick={() => onTabChange('history')}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+                activeTab === 'history'
+                  ? 'bg-accent text-white'
+                  : `${colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'}`
+              }`}
+            >
+              历史筛选结果
+            </button>
           </div>
-          <div>
-            <div className={`text-sm font-semibold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>筛选结果</div>
-            <div className={`text-xs ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>命中 {totalCount} 条，当前显示 {results.length} 条</div>
+        </div>
+
+        <div className="mt-3 text-center">
+          <div className={`text-sm font-semibold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>
+            {activeTab === 'current' ? '筛选结果' : '历史筛选结果'}
+          </div>
+          <div className={`mt-1 text-xs ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+            {activeTab === 'current' ? `命中 ${totalCount} 条，当前显示 ${results.length} 条` : `历史记录 ${history.length} 条`}
           </div>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto fin-scrollbar">
-        {isLoading ? (
-          <div className={`flex h-full items-center justify-center text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>AI 正在分析条件...</div>
+        {activeTab === 'history' ? (
+          history.length === 0 ? (
+            <div className={`flex h-full items-center justify-center px-6 text-center text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+              还没有历史筛选记录。
+            </div>
+          ) : (
+            <div className="py-2">
+              {history.map((item) => {
+                const isActive = item.runId === selectedHistoryRunId;
+                return (
+                  <button
+                    key={item.runId}
+                    onClick={() => onSelectHistory(item.runId)}
+                    className={`mx-3 mb-2 block w-[calc(100%-24px)] rounded-xl border px-3 py-3 text-left transition-colors ${
+                      isActive
+                        ? 'border-accent/40 bg-accent/10'
+                        : `${colors.isDark ? 'border-slate-700 bg-slate-900/40 hover:border-slate-600 hover:bg-slate-800/40' : 'border-slate-200 bg-white/80 hover:border-slate-300 hover:bg-slate-50'}`
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <History className="mt-0.5 h-4 w-4 shrink-0 text-accent-2" />
+                      <div className="min-w-0 flex-1">
+                        <div className={`line-clamp-2 text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>{item.prompt}</div>
+                        <div className={`mt-2 flex items-center justify-between text-[11px] ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                          <span>{formatDateTimeDisplay(item.createdAt, '--')}</span>
+                          <span>{item.matchedCount} 条</span>
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )
+        ) : shouldShowProgressCard ? (
+          <div className="px-4 pt-6">
+            <div className={`w-full rounded-2xl border px-4 py-4 ${colors.isDark ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white/90'}`}>
+              <div className="flex items-center gap-2">
+                {isCanceled
+                  ? <CircleDashed className="h-4 w-4 text-slate-400" />
+                  : <Loader2 className="h-4 w-4 animate-spin text-accent-2" />}
+                <div className={`text-sm font-semibold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>
+                  {isCanceled ? '已取消筛选' : formatQueryStage(queryProgress?.currentStage)}
+                </div>
+                <div className={`ml-auto text-xs ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  {isCanceled ? '已取消' : `${progressPercent}%`}
+                </div>
+              </div>
+              <div className={`mt-2 text-xs ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                {queryProgress?.message || (isCanceled ? '筛选已取消' : 'AI 正在分析筛选条件')}
+              </div>
+              <div className={`mt-3 h-2 overflow-hidden rounded-full ${colors.isDark ? 'bg-slate-800' : 'bg-slate-200'}`}>
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${
+                    isCanceled
+                      ? (colors.isDark ? 'bg-slate-600' : 'bg-slate-400')
+                      : 'bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)]'
+                  }`}
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
+              <div className="mt-4 space-y-3">
+                {orderedProgressSteps.map((step) => (
+                  <div
+                    key={step.key}
+                    className={`rounded-xl border px-3 py-3 ${
+                      step.status === 'completed'
+                        ? (colors.isDark ? 'border-emerald-500/20 bg-emerald-500/8' : 'border-emerald-200 bg-emerald-50/60')
+                        : step.status === 'canceled'
+                          ? (colors.isDark ? 'border-slate-700 bg-slate-950/70' : 'border-slate-300 bg-slate-50')
+                        : step.status === 'active'
+                          ? (colors.isDark ? 'border-accent/30 bg-slate-950/70' : 'border-accent/20 bg-slate-50')
+                          : (colors.isDark ? 'border-slate-800 bg-slate-950/40' : 'border-slate-200 bg-slate-50/70')
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {step.status === 'completed' ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                      ) : step.status === 'canceled' ? (
+                        <CircleDashed className={colors.isDark ? 'h-4 w-4 text-slate-400' : 'h-4 w-4 text-slate-500'} />
+                      ) : step.status === 'active' ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-accent-2" />
+                      ) : (
+                        <CircleDashed className={colors.isDark ? 'h-4 w-4 text-slate-500' : 'h-4 w-4 text-slate-400'} />
+                      )}
+                      <span className={`text-sm font-semibold ${
+                        step.status === 'completed'
+                          ? 'text-emerald-500'
+                          : step.status === 'canceled'
+                            ? (colors.isDark ? 'text-slate-200' : 'text-slate-700')
+                          : colors.isDark ? 'text-slate-100' : 'text-slate-800'
+                      }`}>
+                        {step.label}
+                      </span>
+                      <span className={`ml-auto text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                        {step.time ? formatDateTimeDisplay(step.time, '--') : '--'}
+                      </span>
+                    </div>
+                    <div className={`mt-2 text-sm ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                      {step.message}
+                    </div>
+                    {(step.status === 'active' || step.status === 'canceled') && step.streamingText && (
+                      <StreamingOutputBox
+                        stepKey={step.key}
+                        text={step.streamingText}
+                        isDark={colors.isDark}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         ) : error ? (
           <div className="p-4 text-sm text-red-400">{error}</div>
+        ) : hasCompletedEmptyCurrentRun ? (
+          <div className={`px-6 pt-8 text-center text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+            没有符合条件的结果
+          </div>
         ) : results.length === 0 ? (
-          <div className={`flex h-full items-center justify-center px-6 text-center text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+          <div className={`px-6 pt-8 text-center text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
             AI 筛选结果会显示在这里。你可以直接查看详情，或者加入自选。
           </div>
         ) : (
@@ -127,6 +289,137 @@ export const ScreeningResultList: React.FC<ScreeningResultListProps> = ({
   );
 };
 
+type QueryStepStatus = 'completed' | 'active' | 'pending' | 'canceled';
+
+const STREAMING_OUTPUT_BOTTOM_THRESHOLD = 24;
+
+type OrderedQueryStep = {
+  key: string;
+  label: string;
+  status: QueryStepStatus;
+  message: string;
+  time?: string;
+  streamingText?: string;
+};
+
+const StreamingOutputBox: React.FC<{
+  stepKey: string;
+  text: string;
+  isDark: boolean;
+}> = ({ stepKey, text, isDark }) => {
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const [autoFollow, setAutoFollow] = React.useState(true);
+
+  React.useEffect(() => {
+    setAutoFollow(true);
+  }, [stepKey]);
+
+  React.useEffect(() => {
+    const element = containerRef.current;
+    if (!element || !autoFollow) {
+      return;
+    }
+
+    element.scrollTop = element.scrollHeight;
+  }, [autoFollow, stepKey, text]);
+
+  const handleScroll = React.useCallback(() => {
+    const element = containerRef.current;
+    if (!element) {
+      return;
+    }
+
+    const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    setAutoFollow(distanceToBottom <= STREAMING_OUTPUT_BOTTOM_THRESHOLD);
+  }, []);
+
+  return (
+    <div
+      ref={containerRef}
+      onScroll={handleScroll}
+      className={`mt-3 max-h-[320px] overflow-y-auto whitespace-pre-wrap break-words rounded-xl border px-3 py-3 text-base leading-7 fin-scrollbar ${
+        isDark
+          ? 'border-slate-700 bg-slate-950/70 text-slate-100'
+          : 'border-slate-200 bg-white text-slate-700'
+      }`}
+    >
+      {text}
+    </div>
+  );
+};
+
+const buildOrderedQueryProgressSteps = (
+  queryProgress: ScreeningQueryProgress | null | undefined,
+  streamingText: string,
+): OrderedQueryStep[] => {
+  const stepDefs = [
+    { key: 'prepare', label: '准备请求' },
+    { key: 'reasoning', label: '思考中' },
+    { key: 'generate_sql', label: '生成 SQL' },
+  ] as const;
+
+  const latestLogs = new Map<string, { time?: string; message: string }>();
+  for (const log of queryProgress?.logs || []) {
+    latestLogs.set(log.stage, { time: log.time, message: log.message });
+  }
+
+  const stepIndex = resolveOrderedQueryStepIndex(queryProgress?.currentStage);
+  const isCanceled = queryProgress?.runStatus === 'canceled';
+  const activeIndex = stepIndex >= stepDefs.length ? -1 : stepIndex;
+  const completedUntil = stepIndex >= stepDefs.length ? stepDefs.length - 1 : stepIndex - 1;
+
+  return stepDefs.map((step, index) => {
+    let status: QueryStepStatus = 'pending';
+    if (index <= completedUntil) {
+      status = 'completed';
+    } else if (index === activeIndex && isCanceled) {
+      status = 'canceled';
+    } else if (index === activeIndex) {
+      status = 'active';
+    }
+
+    const latestLog = latestLogs.get(step.key);
+    const defaultMessage = step.key === 'prepare'
+      ? '准备筛选请求'
+      : step.key === 'reasoning'
+        ? '正在实时分析筛选条件'
+        : '正在生成筛选 SQL';
+
+    return {
+      key: step.key,
+      label: step.label,
+      status,
+      message: status === 'active'
+        ? (queryProgress?.message || latestLog?.message || defaultMessage)
+        : status === 'canceled'
+          ? (queryProgress?.message || '已取消筛选')
+        : (latestLog?.message || defaultMessage),
+      time: latestLog?.time,
+      streamingText: (status === 'active' || status === 'canceled') && (step.key === 'reasoning' || step.key === 'generate_sql')
+        ? streamingText
+        : '',
+    };
+  });
+};
+
+const resolveOrderedQueryStepIndex = (stage?: string): number => {
+  switch (stage) {
+    case 'prepare':
+      return 0;
+    case 'reasoning':
+      return 1;
+    case 'generate_sql':
+      return 2;
+    case 'validate_sql':
+    case 'execute_query':
+    case 'store_results':
+    case 'completed':
+      return 3;
+    default:
+      return 0;
+  }
+};
+
 const toStock = (result: ScreeningRunResult): Stock => ({
   symbol: result.symbol,
   name: result.name,
@@ -147,4 +440,25 @@ const formatAmount = (amount: number): string => {
   if (amount >= 100000000) return `${(amount / 100000000).toFixed(2)}亿`;
   if (amount >= 10000) return `${(amount / 10000).toFixed(2)}万`;
   return amount.toFixed(0);
+};
+
+const formatQueryStage = (stage?: string): string => {
+  switch (stage) {
+    case 'prepare':
+      return '准备请求';
+    case 'reasoning':
+      return '思考中';
+    case 'generate_sql':
+      return '生成 SQL';
+    case 'validate_sql':
+      return '校验 SQL';
+    case 'execute_query':
+      return '执行查询';
+    case 'store_results':
+      return '保存结果';
+    case 'completed':
+      return '筛选完成';
+    default:
+      return stage || 'AI 正在分析';
+  }
 };

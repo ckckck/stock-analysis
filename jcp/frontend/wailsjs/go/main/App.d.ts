@@ -19,6 +19,10 @@ export function CancelInterruptedMeeting(arg1:string):Promise<boolean>;
 
 export function CancelMeeting(arg1:string):Promise<boolean>;
 
+export function CancelScreeningQuery():Promise<boolean>;
+
+export function CancelScreeningSync():Promise<boolean>;
+
 export function CheckForUpdate():Promise<services.UpdateInfo>;
 
 export function ClearSessionMessages(arg1:string):Promise<string>;
@@ -69,9 +73,11 @@ export function GetOrCreateSession(arg1:string,arg2:string):Promise<models.Stock
 
 export function GetOrderBook(arg1:string):Promise<models.OrderBook>;
 
-export function GetScreeningHistoryRun(arg1:number,arg2:number,arg3:number):Promise<any>;
+export function GetScreeningHistoryRun(arg1:number,arg2:number,arg3:number):Promise<services.ScreeningQueryResponse>;
 
-export function GetScreeningSyncStatus():Promise<any>;
+export function GetScreeningSyncStatus():Promise<services.ScreeningSyncStatus>;
+
+export function GetScreeningUniverseSymbols(arg1:number):Promise<Array<string>>;
 
 export function GetSessionMessages(arg1:string):Promise<Array<models.ChatMessage>>;
 
@@ -87,9 +93,9 @@ export function GetTradingSchedule():Promise<services.TradingSchedule>;
 
 export function GetWatchlist():Promise<Array<models.Stock>>;
 
-export function ListScreeningHistory(arg1:number):Promise<any>;
-
 export function Greet(arg1:string):Promise<string>;
+
+export function ListScreeningHistory(arg1:number):Promise<services.ScreeningHistoryResponse>;
 
 export function NotifyFrontendReady():Promise<void>;
 
@@ -97,15 +103,17 @@ export function OpenURL(arg1:string):Promise<void>;
 
 export function RemoveFromWatchlist(arg1:string):Promise<string>;
 
-export function RunScreeningQuery(arg1:any):Promise<any>;
-
-export function RunScreeningSync():Promise<any>;
+export function RerunScreeningHistoryRun(arg1:number,arg2:number,arg3:number):Promise<services.ScreeningQueryResponse>;
 
 export function RestartApp():Promise<string>;
 
 export function RetryAgent(arg1:string,arg2:string,arg3:string):Promise<models.ChatMessage>;
 
 export function RetryAgentAndContinue(arg1:string):Promise<Array<models.ChatMessage>>;
+
+export function RunScreeningQuery(arg1:services.ScreeningQueryRequest):Promise<services.ScreeningQueryResponse>;
+
+export function RunScreeningSync(arg1:services.ScreeningSyncRunOptions):Promise<services.ScreeningSyncStatus>;
 
 export function SearchStocks(arg1:string):Promise<Array<services.StockSearchResult>>;
 

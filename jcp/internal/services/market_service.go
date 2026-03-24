@@ -101,6 +101,8 @@ type TradingSchedule struct {
 type MarketService struct {
 	client *http.Client
 
+	screeningDailyBarSource screeningDailyBarSource
+
 	// 股票数据缓存
 	cache    map[string]*stockCache
 	cacheMu  sync.RWMutex
@@ -499,7 +501,20 @@ func (ms *MarketService) ListScreeningStocks(scopes models.ScreeningMarketScopeC
 
 // GetScreeningDailyBars 返回 AI 筛选同步所需的日线数据。
 func (ms *MarketService) GetScreeningDailyBars(symbol string, lookbackDays int) ([]models.KLineData, error) {
-	return ms.GetKLineData(symbol, "1d", lookbackDays)
+	return ms.GetScreeningDailyBarsWithObserver(symbol, lookbackDays, nil)
+}
+
+func (ms *MarketService) GetScreeningDailyBarsWithObserver(symbol string, lookbackDays int, observer ScreeningDailyBarSourceObserver) ([]models.KLineData, error) {
+	source := ms.screeningDailyBarSource
+	if source == nil {
+		source = newScreeningDailyBarSourceChain(
+			newBaoStockDailyBarSource(),
+			screeningDailyBarSourceFunc(func(symbol string, lookbackDays int, _ ScreeningDailyBarSourceObserver) ([]models.KLineData, error) {
+				return ms.GetKLineData(symbol, "1d", lookbackDays)
+			}),
+		)
+	}
+	return source.Fetch(symbol, lookbackDays, observer)
 }
 
 // GetScreeningSnapshots 返回 AI 筛选同步使用的最新快照。
@@ -562,6 +577,14 @@ func (ms *MarketService) fetchKLineData(code string, period string, days int) ([
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf(
+			"kline api status %d for %s: %s",
+			resp.StatusCode,
+			code,
+			httpErrorPreview(body),
+		)
+	}
 
 	klines, err := ms.parseKLineData(string(body))
 	if err != nil {
@@ -575,6 +598,20 @@ func (ms *MarketService) fetchKLineData(code string, period string, days int) ([
 	}
 
 	return klines, nil
+}
+
+func httpErrorPreview(body []byte) string {
+	preview := strings.TrimSpace(string(body))
+	preview = strings.ReplaceAll(preview, "\n", " ")
+	preview = strings.ReplaceAll(preview, "\r", " ")
+	preview = strings.Join(strings.Fields(preview), " ")
+	if preview == "" {
+		return "empty response body"
+	}
+	if len(preview) > 160 {
+		return preview[:160] + "..."
+	}
+	return preview
 }
 
 func getStringField(item []interface{}, fieldIndexes map[string]int, field string) string {
