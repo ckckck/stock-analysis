@@ -48,9 +48,27 @@ export const getScreeningUniverseSymbols = async (limit: number): Promise<string
 };
 
 export const onScreeningSyncProgress = (callback: (progress: ScreeningSyncProgress) => void): (() => void) => {
-  EventsOn('screening:sync:progress', callback);
+  EventsOn('screening:sync:progress', (raw: any) => callback(normalizeScreeningSyncProgress(raw)));
   return () => EventsOff('screening:sync:progress');
 };
+
+const normalizeScreeningSyncProgress = (raw: any): ScreeningSyncProgress => ({
+  marketScope: raw?.marketScope ?? raw?.MarketScope ?? '',
+  mode: raw?.mode ?? raw?.Mode ?? '',
+  runStatus: raw?.runStatus ?? raw?.RunStatus ?? '',
+  progressPercent: raw?.progressPercent ?? raw?.ProgressPercent ?? 0,
+  totalStocks: raw?.totalStocks ?? raw?.TotalStocks ?? 0,
+  completedStocks: raw?.completedStocks ?? raw?.CompletedStocks ?? 0,
+  currentSymbol: raw?.currentSymbol ?? raw?.CurrentSymbol ?? '',
+  currentName: raw?.currentName ?? raw?.CurrentName ?? '',
+  currentStage: raw?.currentStage ?? raw?.CurrentStage ?? '',
+  activeSource: raw?.activeSource ?? raw?.ActiveSource ?? '',
+  lastMessage: raw?.lastMessage ?? raw?.LastMessage ?? '',
+  limitStocks: raw?.limitStocks ?? raw?.LimitStocks ?? 0,
+  resumeFromCheckpoint: raw?.resumeFromCheckpoint ?? raw?.ResumeFromCheckpoint ?? false,
+  events: Array.isArray(raw?.events ?? raw?.Events) ? (raw.events ?? raw.Events).map(normalizeScreeningSyncEvent) : [],
+  error: raw?.error ?? raw?.Error,
+});
 
 const normalizeScreeningSyncStatus = (raw: any): ScreeningSyncStatus => ({
   marketScope: raw?.marketScope ?? raw?.MarketScope ?? '',

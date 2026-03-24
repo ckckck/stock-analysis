@@ -88,11 +88,7 @@ func NewScreeningStore(dataDir ...string) (*ScreeningStore, error) {
 	values.Add("_pragma", "journal_mode(WAL)")
 	values.Add("_pragma", "foreign_keys(ON)")
 	values.Add("_pragma", "synchronous(NORMAL)")
-	dsn := (&url.URL{
-		Scheme:   "file",
-		Path:     dbPath,
-		RawQuery: values.Encode(),
-	}).String()
+	dsn := filepath.ToSlash(dbPath) + "?" + values.Encode()
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
