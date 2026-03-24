@@ -45,18 +45,19 @@ type ScreeningQueryRequest struct {
 }
 
 type ScreeningQueryResponse struct {
-	RunID        int64                `json:"runId"`
-	Prompt       string               `json:"prompt,omitempty"`
-	MarketScope  string               `json:"marketScope"`
-	ResultMode   string               `json:"resultMode"`
-	ResultLimit  int                  `json:"resultLimit"`
-	GeneratedSQL string               `json:"generatedSql"`
-	TotalCount   int                  `json:"totalCount"`
-	Page         int                  `json:"page"`
-	PageSize     int                  `json:"pageSize"`
-	CreatedAt    string               `json:"createdAt,omitempty"`
-	Results      []ScreeningRunResult `json:"results"`
-	Error        string               `json:"error,omitempty"`
+	RunID           int64                `json:"runId"`
+	Prompt          string               `json:"prompt,omitempty"`
+	MarketScope     string               `json:"marketScope"`
+	ResultMode      string               `json:"resultMode"`
+	ResultLimit     int                  `json:"resultLimit"`
+	UniverseSymbols []string             `json:"universeSymbols,omitempty"`
+	GeneratedSQL    string               `json:"generatedSql"`
+	TotalCount      int                  `json:"totalCount"`
+	Page            int                  `json:"page"`
+	PageSize        int                  `json:"pageSize"`
+	CreatedAt       string               `json:"createdAt,omitempty"`
+	Results         []ScreeningRunResult `json:"results"`
+	Error           string               `json:"error,omitempty"`
 }
 
 type ScreeningQueryLog struct {
@@ -357,17 +358,18 @@ func (s *ScreeningQueryService) RunWithProgress(
 	}
 
 	response := &ScreeningQueryResponse{
-		RunID:        runID,
-		Prompt:       req.Prompt,
-		MarketScope:  marketScope,
-		ResultMode:   string(req.ResultMode),
-		ResultLimit:  resultLimit,
-		GeneratedSQL: validSQL,
-		TotalCount:   totalCount,
-		Page:         page,
-		PageSize:     pageSize,
-		CreatedAt:    formatScreeningStoreTime(s.now().UTC()),
-		Results:      paginateScreeningResults(allResults, page, pageSize),
+		RunID:           runID,
+		Prompt:          req.Prompt,
+		MarketScope:     marketScope,
+		ResultMode:      string(req.ResultMode),
+		ResultLimit:     resultLimit,
+		UniverseSymbols: universeSymbols,
+		GeneratedSQL:    validSQL,
+		TotalCount:      totalCount,
+		Page:            page,
+		PageSize:        pageSize,
+		CreatedAt:       formatScreeningStoreTime(s.now().UTC()),
+		Results:         paginateScreeningResults(allResults, page, pageSize),
 	}
 	emitProgress("completed", 100, fmt.Sprintf("筛选完成，命中 %d 条", totalCount), nil)
 	return response, nil
@@ -375,6 +377,15 @@ func (s *ScreeningQueryService) RunWithProgress(
 
 func (s *ScreeningQueryService) RerunHistoryRun(runID int64, page, pageSize int) (*ScreeningQueryResponse, error) {
 	return s.RerunHistoryRunWithContext(context.Background(), runID, page, pageSize, nil)
+}
+
+func (s *ScreeningQueryService) RerunHistoryRunWithUniverse(
+	runID int64,
+	page,
+	pageSize int,
+	universeSymbols []string,
+) (*ScreeningQueryResponse, error) {
+	return s.RerunHistoryRunWithUniverseWithContext(context.Background(), runID, page, pageSize, universeSymbols, nil)
 }
 
 func (s *ScreeningQueryService) RerunHistoryRunWithProgress(
@@ -391,6 +402,17 @@ func (s *ScreeningQueryService) RerunHistoryRunWithContext(
 	runID int64,
 	page,
 	pageSize int,
+	report func(ScreeningQueryProgress),
+) (*ScreeningQueryResponse, error) {
+	return s.RerunHistoryRunWithUniverseWithContext(ctx, runID, page, pageSize, nil, report)
+}
+
+func (s *ScreeningQueryService) RerunHistoryRunWithUniverseWithContext(
+	ctx context.Context,
+	runID int64,
+	page,
+	pageSize int,
+	universeOverride []string,
 	report func(ScreeningQueryProgress),
 ) (*ScreeningQueryResponse, error) {
 	if s == nil || s.store == nil {
@@ -411,6 +433,9 @@ func (s *ScreeningQueryService) RerunHistoryRunWithContext(
 	page = normalizePositive(page, 1)
 	pageSize = normalizePageSize(pageSize)
 	universeSymbols := normalizeScreeningUniverseSymbols(run.UniverseSymbols)
+	if universeOverride != nil {
+		universeSymbols = normalizeScreeningUniverseSymbols(universeOverride)
+	}
 	progressState := ScreeningQueryProgress{
 		RunStatus:     "running",
 		CurrentStage:  "prepare",
@@ -525,17 +550,18 @@ func (s *ScreeningQueryService) RerunHistoryRunWithContext(
 	emitProgress("store_results", 85, "正在保存重跑结果", nil)
 
 	response := &ScreeningQueryResponse{
-		RunID:        newRunID,
-		Prompt:       run.Prompt,
-		MarketScope:  run.MarketScope,
-		ResultMode:   run.ResultMode,
-		ResultLimit:  run.ResultLimit,
-		GeneratedSQL: validSQL,
-		TotalCount:   totalCount,
-		Page:         page,
-		PageSize:     pageSize,
-		CreatedAt:    formatScreeningStoreTime(s.now().UTC()),
-		Results:      paginateScreeningResults(allResults, page, pageSize),
+		RunID:           newRunID,
+		Prompt:          run.Prompt,
+		MarketScope:     run.MarketScope,
+		ResultMode:      run.ResultMode,
+		ResultLimit:     run.ResultLimit,
+		UniverseSymbols: universeSymbols,
+		GeneratedSQL:    validSQL,
+		TotalCount:      totalCount,
+		Page:            page,
+		PageSize:        pageSize,
+		CreatedAt:       formatScreeningStoreTime(s.now().UTC()),
+		Results:         paginateScreeningResults(allResults, page, pageSize),
 	}
 	emitProgress("completed", 100, fmt.Sprintf("重跑完成，命中 %d 条", totalCount), nil)
 	return response, nil
@@ -588,18 +614,26 @@ func (s *ScreeningQueryService) GetRun(runID int64, page, pageSize int) (*Screen
 	pageSize = normalizePageSize(pageSize)
 
 	return &ScreeningQueryResponse{
-		RunID:        run.ID,
-		Prompt:       run.Prompt,
-		MarketScope:  run.MarketScope,
-		ResultMode:   run.ResultMode,
-		ResultLimit:  run.ResultLimit,
-		GeneratedSQL: run.GeneratedSQL,
-		TotalCount:   run.MatchedCount,
-		Page:         page,
-		PageSize:     pageSize,
-		CreatedAt:    formatScreeningStoreTime(run.CreatedAt),
-		Results:      paginateScreeningResults(results, page, pageSize),
+		RunID:           run.ID,
+		Prompt:          run.Prompt,
+		MarketScope:     run.MarketScope,
+		ResultMode:      run.ResultMode,
+		ResultLimit:     run.ResultLimit,
+		UniverseSymbols: run.UniverseSymbols,
+		GeneratedSQL:    run.GeneratedSQL,
+		TotalCount:      run.MatchedCount,
+		Page:            page,
+		PageSize:        pageSize,
+		CreatedAt:       formatScreeningStoreTime(run.CreatedAt),
+		Results:         paginateScreeningResults(results, page, pageSize),
 	}, nil
+}
+
+func (s *ScreeningQueryService) DeleteRun(runID int64) error {
+	if s == nil || s.store == nil {
+		return fmt.Errorf("screening query service not initialized")
+	}
+	return s.store.DeleteScreeningRun(runID)
 }
 
 func (s *ScreeningQueryService) buildPrompt(req ScreeningQueryRequest) string {

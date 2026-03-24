@@ -187,6 +187,50 @@ func TestParseBaoStockKLines(t *testing.T) {
 	}
 }
 
+func TestMarketServiceListScreeningStocksExcludesChiNextButKeepsChiNextIndex(t *testing.T) {
+	ms := &MarketService{}
+
+	stocks, err := ms.ListScreeningStocks(models.ScreeningMarketScopeConfig{
+		Shanghai: true,
+		Shenzhen: true,
+		Indices:  true,
+	})
+	if err != nil {
+		t.Fatalf("ListScreeningStocks() error = %v", err)
+	}
+
+	foundMainBoard := false
+	foundChiNextStock := false
+	foundChiNext301Stock := false
+	foundChiNextIndex := false
+
+	for _, stock := range stocks {
+		switch stock.Symbol {
+		case "sz000001":
+			foundMainBoard = true
+		case "sz300001":
+			foundChiNextStock = true
+		case "sz301011":
+			foundChiNext301Stock = true
+		case "sz399006":
+			foundChiNextIndex = true
+		}
+	}
+
+	if !foundMainBoard {
+		t.Fatalf("ListScreeningStocks() missing non-ChiNext Shenzhen stock sz000001")
+	}
+	if foundChiNextStock {
+		t.Fatalf("ListScreeningStocks() unexpectedly contains ChiNext stock sz300001")
+	}
+	if foundChiNext301Stock {
+		t.Fatalf("ListScreeningStocks() unexpectedly contains ChiNext stock sz301011")
+	}
+	if !foundChiNextIndex {
+		t.Fatalf("ListScreeningStocks() missing ChiNext index sz399006 when indices are enabled")
+	}
+}
+
 type stubScreeningDailyBarSource struct {
 	bars  []models.KLineData
 	err   error

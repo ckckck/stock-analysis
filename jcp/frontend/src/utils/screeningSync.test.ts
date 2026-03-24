@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createPendingScreeningSyncStatus,
+  resolveScreeningPresetFromResult,
   resolveScreeningSyncCoverageStats,
   resolveScreeningPrimaryActionLabel,
   resolveSyncDialogCopy,
@@ -162,22 +163,48 @@ describe('resolveScreeningPrimaryActionLabel', () => {
   it('returns 开始筛选 for a normal run', () => {
     expect(resolveScreeningPrimaryActionLabel({
       loading: false,
-      canReuseHistorySql: false,
+      showHistoryRerunLabel: false,
     })).toBe('开始筛选');
   });
 
   it('returns loading copy while screening is running', () => {
     expect(resolveScreeningPrimaryActionLabel({
       loading: true,
-      canReuseHistorySql: false,
+      showHistoryRerunLabel: false,
     })).toBe('筛选中...');
   });
 
-  it('returns historical rerun copy when the current result still reuses saved sql', () => {
+  it('returns historical rerun copy when current result comes from history and prompt is unchanged', () => {
     expect(resolveScreeningPrimaryActionLabel({
       loading: false,
-      canReuseHistorySql: true,
+      showHistoryRerunLabel: true,
     })).toBe('根据历史筛选方式重新筛选');
+  });
+});
+
+describe('resolveScreeningPresetFromResult', () => {
+  it('maps historical top_n result limit back to the matching preset', () => {
+    expect(resolveScreeningPresetFromResult({
+      resultMode: 'top_n',
+      resultLimit: 100,
+      fallbackPreset: '50',
+    })).toBe('100');
+  });
+
+  it('maps unlimited history to unlimited preset', () => {
+    expect(resolveScreeningPresetFromResult({
+      resultMode: 'unlimited',
+      resultLimit: 0,
+      fallbackPreset: '50',
+    })).toBe('unlimited');
+  });
+
+  it('falls back when historical limit is not one of the supported presets', () => {
+    expect(resolveScreeningPresetFromResult({
+      resultMode: 'top_n',
+      resultLimit: 30,
+      fallbackPreset: '50',
+    })).toBe('50');
   });
 });
 

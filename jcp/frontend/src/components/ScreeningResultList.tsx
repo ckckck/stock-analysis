@@ -1,5 +1,5 @@
 import React from 'react';
-import { Check, CheckCircle2, ChevronRight, CircleDashed, History, Loader2, Plus } from 'lucide-react';
+import { Check, CheckCircle2, ChevronRight, CircleDashed, History, Loader2, Plus, X } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useCandleColor } from '../contexts/CandleColorContext';
 import { ScreeningHistoryItem, ScreeningQueryProgress, ScreeningResultTab, ScreeningRunResult, Stock } from '../types';
@@ -17,8 +17,10 @@ interface ScreeningResultListProps {
   queryProgress?: ScreeningQueryProgress | null;
   error: string;
   watchlistSymbols: Set<string>;
+  deletingHistoryRunId?: number | null;
   onTabChange: (tab: ScreeningResultTab) => void;
   onSelectHistory: (runId: number) => void;
+  onRequestDeleteHistory: (item: ScreeningHistoryItem) => void;
   onSelect: (symbol: string) => void;
   onAddToWatchlist: (stock: Stock) => void;
 }
@@ -35,8 +37,10 @@ export const ScreeningResultList: React.FC<ScreeningResultListProps> = ({
   queryProgress,
   error,
   watchlistSymbols,
+  deletingHistoryRunId,
   onTabChange,
   onSelectHistory,
+  onRequestDeleteHistory,
   onSelect,
   onAddToWatchlist,
 }) => {
@@ -99,10 +103,10 @@ export const ScreeningResultList: React.FC<ScreeningResultListProps> = ({
             <div className="py-2">
               {history.map((item) => {
                 const isActive = item.runId === selectedHistoryRunId;
+                const isDeleting = item.runId === deletingHistoryRunId;
                 return (
-                  <button
+                  <div
                     key={item.runId}
-                    onClick={() => onSelectHistory(item.runId)}
                     className={`mx-3 mb-2 block w-[calc(100%-24px)] rounded-xl border px-3 py-3 text-left transition-colors ${
                       isActive
                         ? 'border-accent/40 bg-accent/10'
@@ -110,16 +114,37 @@ export const ScreeningResultList: React.FC<ScreeningResultListProps> = ({
                     }`}
                   >
                     <div className="flex items-start gap-2">
-                      <History className="mt-0.5 h-4 w-4 shrink-0 text-accent-2" />
-                      <div className="min-w-0 flex-1">
-                        <div className={`line-clamp-2 text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>{item.prompt}</div>
-                        <div className={`mt-2 flex items-center justify-between text-[11px] ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                          <span>{formatDateTimeDisplay(item.createdAt, '--')}</span>
-                          <span>{item.matchedCount} 条</span>
+                      <button
+                        type="button"
+                        onClick={() => onSelectHistory(item.runId)}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <div className="flex items-start gap-2">
+                          <History className="mt-0.5 h-4 w-4 shrink-0 text-accent-2" />
+                          <div className="min-w-0 flex-1">
+                            <div className={`line-clamp-2 text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>{item.prompt}</div>
+                            <div className={`mt-2 flex items-center justify-between text-[11px] ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                              <span>{formatDateTimeDisplay(item.createdAt, '--')}</span>
+                              <span>{item.matchedCount} 条</span>
+                            </div>
+                          </div>
                         </div>
-                      </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onRequestDeleteHistory(item)}
+                        disabled={isDeleting}
+                        className={`rounded-full p-1.5 transition-colors ${
+                          colors.isDark
+                            ? 'text-slate-500 hover:bg-slate-800 hover:text-red-300'
+                            : 'text-slate-400 hover:bg-slate-100 hover:text-red-500'
+                        } disabled:cursor-not-allowed disabled:opacity-50`}
+                        aria-label={`删除历史记录 ${item.prompt}`}
+                      >
+                        {isDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                      </button>
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>

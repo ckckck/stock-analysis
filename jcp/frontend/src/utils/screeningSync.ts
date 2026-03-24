@@ -1,4 +1,4 @@
-import type { ScreeningSyncProgress, ScreeningSyncStatus } from '../types';
+import type { ScreeningResultMode, ScreeningResultPreset, ScreeningSyncProgress, ScreeningSyncStatus } from '../types';
 
 export type SyncButtonTone = 'success' | 'warning' | 'danger';
 export type ScreeningSyncDialogMode = 'screening' | 'sync-only';
@@ -19,7 +19,7 @@ export interface ScreeningSyncDialogCopy {
 
 export interface ScreeningPrimaryActionLabelOptions {
   loading: boolean;
-  canReuseHistorySql: boolean;
+  showHistoryRerunLabel: boolean;
 }
 
 export interface ScreeningSyncCoverageStats {
@@ -231,15 +231,35 @@ export const resolveSyncDialogCopy = (mode: ScreeningSyncDialogMode): ScreeningS
 
 export const resolveScreeningPrimaryActionLabel = ({
   loading,
-  canReuseHistorySql,
+  showHistoryRerunLabel,
 }: ScreeningPrimaryActionLabelOptions): string => {
   if (loading) {
     return '筛选中...';
   }
-  if (canReuseHistorySql) {
+  if (showHistoryRerunLabel) {
     return '根据历史筛选方式重新筛选';
   }
   return '开始筛选';
+};
+
+export const resolveScreeningPresetFromResult = (input: {
+  resultMode: ScreeningResultMode;
+  resultLimit: number;
+  fallbackPreset: ScreeningResultPreset;
+}): ScreeningResultPreset => {
+  if (input.resultMode === 'unlimited') {
+    return 'unlimited';
+  }
+  switch (input.resultLimit) {
+    case 50:
+      return '50';
+    case 100:
+      return '100';
+    case 200:
+      return '200';
+    default:
+      return input.fallbackPreset;
+  }
 };
 
 export const shouldContinueAfterScreeningSync = (

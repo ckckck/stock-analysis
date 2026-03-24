@@ -599,6 +599,13 @@ func (s *ScreeningStore) GetScreeningRun(runID int64) (*ScreeningRun, error) {
 	return &run, nil
 }
 
+func (s *ScreeningStore) DeleteScreeningRun(runID int64) error {
+	if _, err := s.db.Exec(`DELETE FROM screening_runs WHERE id = ?`, runID); err != nil {
+		return fmt.Errorf("delete screening run: %w", err)
+	}
+	return nil
+}
+
 func (s *ScreeningStore) ListScreeningRunResults(runID int64) ([]ScreeningRunResult, error) {
 	rows, err := s.db.Query(
 		`SELECT run_id, symbol, name, rank, score, snapshot_trade_date, price, change_percent, volume, amount

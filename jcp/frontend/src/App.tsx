@@ -18,7 +18,7 @@ import { getWatchlist, addToWatchlist, removeFromWatchlist } from './services/wa
 import { getKLineData, getOrderBook } from './services/stockService';
 import { getOrCreateSession, StockSession, updateStockPosition } from './services/sessionService';
 import { cancelScreeningSync, getConfig, getScreeningSyncStatus, getScreeningUniverseSymbols, onScreeningSyncProgress, runScreeningSync, updateConfig, type AppConfig as FrontendAppConfig } from './services/configService';
-import { cancelScreeningQuery, getScreeningHistoryRun, listScreeningHistory, onScreeningQueryProgress, rerunScreeningHistoryRun, runScreeningQuery } from './services/screeningService';
+import { cancelScreeningQuery, deleteScreeningHistoryRun, getScreeningHistoryRun, listScreeningHistory, onScreeningQueryProgress, rerunScreeningHistoryRun, rerunScreeningHistoryRunWithUniverse, runScreeningQuery } from './services/screeningService';
 import { useMarketEvents } from './hooks/useMarketEvents';
 import { useMarketStatus } from './hooks/useMarketStatus';
 import { formatDateDisplay, formatDateTimeDisplay } from './utils/datetime';
@@ -44,12 +44,15 @@ import {
   formatScreeningSyncRunStatus,
   mergeScreeningSyncProgress,
   resolveScreeningSyncCoverageStats,
+  resolveScreeningPresetFromResult,
   resolveSyncDialogCopy,
   resolveTopbarSyncButtonState,
   shouldContinueAfterScreeningSync,
   type ScreeningSyncDialogMode,
   type SyncButtonTone,
 } from './utils/screeningSync';
+import { canReuseHistorySql as shouldReuseHistorySql, canShowHistoryRerunLabel } from './utils/screeningHistoryReuse';
+import { resolveHistorySelectionAfterDelete } from './utils/screeningHistoryDelete';
 import { debugAppEvent } from './utils/appLog';
 import {
   AppScreenMode,
@@ -101,6 +104,36 @@ const isScreeningSyncTerminal = (runStatus?: string): boolean => (
   Boolean(runStatus && SCREENING_SYNC_TERMINAL_STATUSES.has(runStatus))
 );
 
+interface ScreeningHistoryReuseBaseline {
+  prompt: string;
+  marketScope: string;
+  resultMode: ScreeningResultMode;
+  resultLimit: number;
+  usedTestScope: boolean;
+  testLimit: number;
+}
+
+const resolveScreeningMarketScopeKey = (config: ScreeningConfig | null): string => {
+  const values: string[] = [];
+  if (config?.markets.shanghai) values.push('shanghai');
+  if (config?.markets.shenzhen) values.push('shenzhen');
+  if (config?.markets.beijing) values.push('beijing');
+  if (config?.markets.indices) values.push('indices');
+  return values.join(',');
+};
+
+const buildScreeningHistoryReuseBaseline = (response: ScreeningQueryResponse): ScreeningHistoryReuseBaseline => {
+  const testLimit = response.universeSymbols?.length ?? 0;
+  return {
+    prompt: response.prompt?.trim() ?? '',
+    marketScope: response.marketScope ?? '',
+    resultMode: response.resultMode,
+    resultLimit: response.resultLimit ?? 0,
+    usedTestScope: testLimit > 0,
+    testLimit,
+  };
+};
+
 const App: React.FC = () => {
   const { colors } = useTheme();
   const cc = useCandleColor();
@@ -129,8 +162,12 @@ const App: React.FC = () => {
   const [screeningHistory, setScreeningHistory] = useState<ScreeningHistoryItem[]>([]);
   const [screeningResultTab, setScreeningResultTab] = useState<ScreeningResultTab>('current');
   const [screeningSelectedHistoryRunId, setScreeningSelectedHistoryRunId] = useState<number | null>(null);
+  const [screeningDeleteTarget, setScreeningDeleteTarget] = useState<ScreeningHistoryItem | null>(null);
+  const [screeningDeleteLoading, setScreeningDeleteLoading] = useState(false);
+  const [screeningDeleteError, setScreeningDeleteError] = useState('');
   const [screeningRunSource, setScreeningRunSource] = useState<ScreeningRunSource>('ai');
   const [screeningRerunBaseRunId, setScreeningRerunBaseRunId] = useState<number | null>(null);
+  const [screeningHistoryReuseBaseline, setScreeningHistoryReuseBaseline] = useState<ScreeningHistoryReuseBaseline | null>(null);
   const [screeningGeneratedSql, setScreeningGeneratedSql] = useState('');
   const [screeningSqlViewerOpen, setScreeningSqlViewerOpen] = useState(false);
   const [screeningTotalCount, setScreeningTotalCount] = useState(0);
@@ -259,9 +296,70 @@ const App: React.FC = () => {
     [screeningSyncStatus],
   );
 
+  const currentScreeningResultMode = useMemo<ScreeningResultMode>(
+    () => screeningPreset === 'unlimited' ? 'unlimited' : 'top_n',
+    [screeningPreset],
+  );
+
+  const currentScreeningResultLimit = useMemo(
+    () => currentScreeningResultMode === 'unlimited' ? 0 : Number(screeningPreset),
+    [currentScreeningResultMode, screeningPreset],
+  );
+
+  const currentScreeningMarketScope = useMemo(
+    () => resolveScreeningMarketScopeKey(screeningConfig),
+    [screeningConfig],
+  );
+
   const canReuseHistorySql = useMemo(
-    () => screeningRunSource === 'history_sql' && screeningRerunBaseRunId !== null,
-    [screeningRerunBaseRunId, screeningRunSource],
+    () => (
+      screeningRunSource === 'history_sql'
+      && screeningRerunBaseRunId !== null
+      && screeningHistoryReuseBaseline !== null
+      && shouldReuseHistorySql({
+        currentPrompt: screeningPrompt,
+        currentMarketScope: currentScreeningMarketScope,
+        currentResultMode: currentScreeningResultMode,
+        currentResultLimit: currentScreeningResultLimit,
+        currentTestMode: welcomeSyncTestMode,
+        currentTestLimit: welcomeSyncTestMode ? welcomeSyncTestLimit : 0,
+        historyPrompt: screeningHistoryReuseBaseline.prompt,
+        historyMarketScope: screeningHistoryReuseBaseline.marketScope,
+        historyResultMode: screeningHistoryReuseBaseline.resultMode,
+        historyResultLimit: screeningHistoryReuseBaseline.resultLimit,
+        historyUsedTestScope: screeningHistoryReuseBaseline.usedTestScope,
+        historyTestLimit: screeningHistoryReuseBaseline.testLimit,
+      })
+    ),
+    [
+      currentScreeningMarketScope,
+      currentScreeningResultLimit,
+      currentScreeningResultMode,
+      screeningHistoryReuseBaseline,
+      screeningPrompt,
+      screeningRerunBaseRunId,
+      screeningRunSource,
+      welcomeSyncTestLimit,
+      welcomeSyncTestMode,
+    ],
+  );
+
+  const shouldShowHistoryRerunLabel = useMemo(
+    () => (
+      screeningRunSource === 'history_sql'
+      && screeningRerunBaseRunId !== null
+      && screeningHistoryReuseBaseline !== null
+      && canShowHistoryRerunLabel({
+        currentPrompt: screeningPrompt,
+        historyPrompt: screeningHistoryReuseBaseline.prompt,
+      })
+    ),
+    [
+      screeningHistoryReuseBaseline,
+      screeningPrompt,
+      screeningRerunBaseRunId,
+      screeningRunSource,
+    ],
   );
 
   const refreshScreeningBootstrapState = useCallback(async () => {
@@ -799,10 +897,16 @@ const App: React.FC = () => {
     setScreeningRunSource(options?.source ?? 'ai');
     setScreeningSelectedHistoryRunId(options?.historyRunId ?? null);
     setScreeningRerunBaseRunId(options?.rerunBaseRunId ?? null);
+    setScreeningHistoryReuseBaseline((options?.source ?? 'ai') === 'history_sql' ? buildScreeningHistoryReuseBaseline(response) : null);
     setScreeningGeneratedSql(response.generatedSql ?? '');
     if (response.prompt) {
       setScreeningPrompt(response.prompt);
     }
+    setScreeningPreset(prev => resolveScreeningPresetFromResult({
+      resultMode: response.resultMode,
+      resultLimit: response.resultLimit,
+      fallbackPreset: prev,
+    }));
     if (response.results && response.results.length > 0) {
       void loadSelectedStockContext(response.results[0].symbol, response.results[0].name);
     }
@@ -819,6 +923,44 @@ const App: React.FC = () => {
       console.error('Failed to load screening history:', error);
     }
   }, [watchlist.length]);
+
+  const handleRequestDeleteScreeningHistory = useCallback((item: ScreeningHistoryItem) => {
+    if (screeningDeleteLoading) return;
+    setScreeningDeleteError('');
+    setScreeningDeleteTarget(item);
+  }, [screeningDeleteLoading]);
+
+  const handleCloseDeleteScreeningHistory = useCallback(() => {
+    if (screeningDeleteLoading) return;
+    setScreeningDeleteError('');
+    setScreeningDeleteTarget(null);
+  }, [screeningDeleteLoading]);
+
+  const handleConfirmDeleteScreeningHistory = useCallback(async () => {
+    if (!screeningDeleteTarget) return;
+
+    setScreeningDeleteLoading(true);
+    setScreeningDeleteError('');
+    try {
+      await deleteScreeningHistoryRun(screeningDeleteTarget.runId);
+      setScreeningHistory(prev => prev.filter(item => item.runId !== screeningDeleteTarget.runId));
+      setScreeningSelectedHistoryRunId(prev => resolveHistorySelectionAfterDelete({
+        selectedHistoryRunId: prev,
+        deletedRunId: screeningDeleteTarget.runId,
+      }));
+      if (screeningRerunBaseRunId === screeningDeleteTarget.runId) {
+        setScreeningRunSource('ai');
+        setScreeningRerunBaseRunId(null);
+        setScreeningHistoryReuseBaseline(null);
+      }
+      setScreeningDeleteTarget(null);
+      await refreshScreeningHistory();
+    } catch (error) {
+      setScreeningDeleteError(error instanceof Error ? error.message : '删除历史筛选记录失败');
+    } finally {
+      setScreeningDeleteLoading(false);
+    }
+  }, [refreshScreeningHistory, screeningDeleteTarget, screeningRerunBaseRunId]);
 
   const executeScreening = useCallback(async (
     promptText: string,
@@ -842,14 +984,12 @@ const App: React.FC = () => {
       logs: [],
     });
     try {
-      const resultLimit = screeningPreset === 'unlimited' ? 0 : Number(screeningPreset);
-      const resultMode: ScreeningResultMode = screeningPreset === 'unlimited' ? 'unlimited' : 'top_n';
       const response = await runScreeningQuery({
         prompt: normalizedPrompt,
-        resultMode,
-        resultLimit,
+        resultMode: currentScreeningResultMode,
+        resultLimit: currentScreeningResultLimit,
         page: 1,
-        pageSize: screeningPreset === 'unlimited' ? 200 : resultLimit,
+        pageSize: currentScreeningResultMode === 'unlimited' ? 200 : currentScreeningResultLimit,
         universeSymbols: options?.universeSymbols,
       });
       if (screeningCancelRequestedRef.current) {
@@ -882,9 +1022,12 @@ const App: React.FC = () => {
     } finally {
       setScreeningLoading(false);
     }
-  }, [applyScreeningResponse, refreshScreeningHistory, screeningPreset]);
+  }, [applyScreeningResponse, currentScreeningResultLimit, currentScreeningResultMode, refreshScreeningHistory]);
 
-  const executeHistoryRerun = useCallback(async (runId: number) => {
+  const executeHistoryRerun = useCallback(async (
+    runId: number,
+    options?: { universeSymbols?: string[] },
+  ) => {
     screeningCancelRequestedRef.current = false;
     setScreenMode('screening');
     setScreeningLoading(true);
@@ -900,7 +1043,9 @@ const App: React.FC = () => {
       logs: [],
     });
     try {
-      const response = await rerunScreeningHistoryRun(runId, 1, 200);
+      const response = options?.universeSymbols && options.universeSymbols.length > 0
+        ? await rerunScreeningHistoryRunWithUniverse(runId, options.universeSymbols, 1, 200)
+        : await rerunScreeningHistoryRun(runId, 1, 200);
       if (screeningCancelRequestedRef.current) {
         return;
       }
@@ -959,12 +1104,8 @@ const App: React.FC = () => {
   }, [screeningLoading]);
 
   const handleRunScreening = useCallback(async () => {
-    if (screeningRunSource === 'history_sql' && screeningRerunBaseRunId) {
-      await executeHistoryRerun(screeningRerunBaseRunId);
-      return;
-    }
     openScreeningConfirm(screeningPrompt);
-  }, [executeHistoryRerun, openScreeningConfirm, screeningPrompt, screeningRerunBaseRunId, screeningRunSource]);
+  }, [openScreeningConfirm, screeningPrompt]);
 
   const handleOpenScreeningSettings = useCallback(() => {
     setSettingsInitialTab('screening');
@@ -1045,13 +1186,27 @@ const App: React.FC = () => {
 
       setScreeningConfirmSyncStarted(false);
       setScreeningConfirmVisible(false);
+      if (canReuseHistorySql && screeningRerunBaseRunId) {
+        await executeHistoryRerun(screeningRerunBaseRunId, { universeSymbols });
+        return;
+      }
       await executeScreening(normalizedPrompt, { universeSymbols });
     } catch (error) {
       setWelcomeSyncError(error instanceof Error ? error.message : '同步失败');
     } finally {
       setWelcomeSyncLoading(false);
     }
-  }, [executeScreening, pendingScreeningPrompt, refreshScreeningBootstrapState, screeningConfig, welcomeSyncTestLimit, welcomeSyncTestMode]);
+  }, [
+    canReuseHistorySql,
+    executeHistoryRerun,
+    executeScreening,
+    pendingScreeningPrompt,
+    refreshScreeningBootstrapState,
+    screeningConfig,
+    screeningRerunBaseRunId,
+    welcomeSyncTestLimit,
+    welcomeSyncTestMode,
+  ]);
 
   const handleCancelScreeningConfirm = useCallback(async () => {
     const isSyncRunning = welcomeSyncLoading || screeningSyncStatus?.runStatus === 'running';
@@ -1322,6 +1477,14 @@ const App: React.FC = () => {
           onOpenSettings={handleOpenGeneralSettings}
         />
         <SettingsDialog isOpen={showSettings} onClose={handleCloseSettings} initialTab={settingsInitialTab} />
+        <DeleteScreeningHistoryDialog
+          visible={screeningDeleteTarget !== null}
+          item={screeningDeleteTarget}
+          loading={screeningDeleteLoading}
+          error={screeningDeleteError}
+          onClose={handleCloseDeleteScreeningHistory}
+          onConfirm={() => { void handleConfirmDeleteScreeningHistory(); }}
+        />
         <SyncActionDialog
           mode="screening"
           visible={screeningConfirmVisible}
@@ -1549,8 +1712,10 @@ const App: React.FC = () => {
                   queryProgress={screeningQueryProgress}
                   error={screeningError}
                   watchlistSymbols={watchlistSymbols}
+                  deletingHistoryRunId={screeningDeleteLoading ? screeningDeleteTarget?.runId ?? null : null}
                   onTabChange={setScreeningResultTab}
                   onSelectHistory={(runId) => { void handleSelectScreeningHistory(runId); }}
+                  onRequestDeleteHistory={handleRequestDeleteScreeningHistory}
                   onSelect={(symbol) => { void handleSelectStock(symbol); }}
                   onAddToWatchlist={handleAddStock}
                 />
@@ -1560,16 +1725,11 @@ const App: React.FC = () => {
                   prompt={screeningPrompt}
                   resultPreset={screeningPreset}
                   loading={screeningLoading}
-                  canReuseHistorySql={canReuseHistorySql}
+                  showHistoryRerunLabel={shouldShowHistoryRerunLabel}
                   canCancel={screeningLoading}
                   generatedSql={screeningGeneratedSql}
                   onPromptChange={(value) => {
                     setScreeningPrompt(value);
-                    if (screeningRunSource === 'history_sql') {
-                      setScreeningRunSource('ai');
-                      setScreeningRerunBaseRunId(null);
-                      setScreeningSelectedHistoryRunId(null);
-                    }
                     setScreeningGeneratedSql('');
                     setScreeningSqlViewerOpen(false);
                   }}
@@ -1702,8 +1862,15 @@ const App: React.FC = () => {
           )}
         </div>
       </div>
-
-        <SettingsDialog isOpen={showSettings} onClose={handleCloseSettings} initialTab={settingsInitialTab} />
+      <SettingsDialog isOpen={showSettings} onClose={handleCloseSettings} initialTab={settingsInitialTab} />
+      <DeleteScreeningHistoryDialog
+        visible={screeningDeleteTarget !== null}
+        item={screeningDeleteTarget}
+        loading={screeningDeleteLoading}
+        error={screeningDeleteError}
+        onClose={handleCloseDeleteScreeningHistory}
+        onConfirm={() => { void handleConfirmDeleteScreeningHistory(); }}
+      />
       {selectedStock && (
         <PositionDialog
           isOpen={showPosition}
@@ -1767,6 +1934,15 @@ interface ScreeningSQLDialogProps {
   onClose: () => void;
 }
 
+interface DeleteScreeningHistoryDialogProps {
+  visible: boolean;
+  item: ScreeningHistoryItem | null;
+  loading: boolean;
+  error: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+
 interface SyncActionDialogProps {
   mode: ScreeningSyncDialogMode;
   visible: boolean;
@@ -1793,6 +1969,71 @@ interface SyncActionDialogProps {
   onConfirm: () => void;
   onOpenSyncSettings: () => void;
 }
+
+const DeleteScreeningHistoryDialog: React.FC<DeleteScreeningHistoryDialogProps> = ({
+  visible,
+  item,
+  loading,
+  error,
+  onClose,
+  onConfirm,
+}) => {
+  const { colors } = useTheme();
+
+  if (!visible || !item) return null;
+
+  return (
+    <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-sm">
+      <div className={`w-full max-w-md rounded-3xl border shadow-2xl ${
+        colors.isDark ? 'border-slate-700 bg-slate-900/95' : 'border-slate-200 bg-white/95'
+      }`}>
+        <div className="border-b fin-divider-soft px-6 py-5">
+          <div className={`text-lg font-semibold ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>
+            删除历史筛选记录
+          </div>
+          <div className={`mt-1 text-sm ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+            删除后无法恢复，确认删除这条历史筛选记录吗？
+          </div>
+        </div>
+
+        <div className="px-6 py-5">
+          <div className={`rounded-2xl border px-4 py-4 text-sm ${
+            colors.isDark ? 'border-slate-700 bg-slate-950/40 text-slate-200' : 'border-slate-200 bg-slate-50/80 text-slate-700'
+          }`}>
+            {item.prompt}
+          </div>
+          {error && (
+            <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+              {error}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-3 border-t fin-divider-soft px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            className={`rounded-xl border px-4 py-2 text-sm ${
+              colors.isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800/70' : 'border-slate-300 text-slate-600 hover:bg-slate-100'
+            } disabled:opacity-50`}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-xl bg-red-500 px-4 py-2 text-sm font-semibold text-white hover:bg-red-600 disabled:opacity-60"
+          >
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+            <span>{loading ? '删除中...' : '确认删除'}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const SyncActionDialog: React.FC<SyncActionDialogProps> = ({
   mode,

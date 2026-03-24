@@ -31,6 +31,8 @@ export function DeleteAgentConfig(arg1:string):Promise<string>;
 
 export function DeleteMCPServer(arg1:string):Promise<string>;
 
+export function DeleteScreeningHistoryRun(arg1:number):Promise<string>;
+
 export function DeleteStrategy(arg1:string):Promise<string>;
 
 export function DoUpdate():Promise<string>;
@@ -106,6 +108,8 @@ export function OpenURL(arg1:string):Promise<void>;
 export function RemoveFromWatchlist(arg1:string):Promise<string>;
 
 export function RerunScreeningHistoryRun(arg1:number,arg2:number,arg3:number):Promise<services.ScreeningQueryResponse>;
+
+export function RerunScreeningHistoryRunWithUniverse(arg1:number,arg2:number,arg3:number,arg4:Array<string>):Promise<services.ScreeningQueryResponse>;
 
 export function RestartApp():Promise<string>;
 

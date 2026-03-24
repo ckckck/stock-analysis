@@ -35,7 +35,7 @@
 1. 手动同步现在有两条入口：
    - 顶部栏“龙虎榜”前的同步状态按钮，适合直接看当前同步覆盖率并进入“仅同步”弹框，见 `jcp/frontend/src/App.tsx:1175`、`jcp/frontend/src/App.tsx:1527`。
    - 设置页 `AI筛选` 选项卡，适合调整市场范围、首次同步范围、保留策略、自动同步时间，以及手动同步区里的“立即同步 / 取消 / 只同步前 N 只股票测试”入口；左侧导航里已经不再保留“软件更新”菜单，见 `jcp/frontend/src/components/SettingsDialog.tsx:57`、`jcp/frontend/src/components/SettingsDialog.tsx:313`、`jcp/frontend/src/components/SettingsDialog.tsx:418`。
-2. 首次同步前先确认市场范围。默认勾选沪市和深市，北交所和指数需要手动启用，见 `jcp/frontend/src/components/SettingsDialog.tsx:1317`。
+2. 首次同步前先确认市场范围。默认勾选沪市和深市，北交所和指数需要手动启用；其中深市创业板个股已在后端股票池构建时被过滤，不会进入同步或筛选，但创业板指数仍可在启用“指数”时保留，见 `jcp/frontend/src/components/SettingsDialog.tsx:1317`、`jcp/internal/services/market_service.go:632`。
 3. 顶部栏入口会先根据本地同步状态显示三种视觉状态：全部完成时显示绿色“已同步”并禁用；部分完成时主文案仍是黄色“立即同步”，但右侧数字会优先显示当前已完成股票数 `(n/总数)`；未同步时显示红色“立即同步 (0/总数)” 或 `(--/--)`。如果用户在同步过程中取消，前端会保留当前已完成数，并在下一次开始时沿用断点进度显示，再继续调用同一个断点续传后端流程，见 `jcp/frontend/src/utils/screeningSync.ts:82`、`jcp/frontend/src/utils/screeningSync.ts:125`、`jcp/frontend/src/App.tsx:823`、`jcp/frontend/src/App.tsx:886`。
 4. 点击“立即同步”后，前端调用 `RunScreeningSync({ mode, limitStocks })`；若勾选测试上限，只会处理前 N 只股票，未勾选则按完整市场范围执行。后端会先写基础股票列表，再按 `sync_state` 判断是首次窗口同步还是按最近交易日增量补齐，见 `jcp/app.go:373`、`jcp/internal/services/screening_sync_service.go:144`、`jcp/internal/services/screening_sync_service.go:194`。
 5. 日线同步取数顺序是 `Baostock -> Sina`。如果 `Baostock` 登录、查询或返回空数据失败，才会回退到现有新浪日线接口；因此同步报错里可能同时带有两段来源上下文，见 `jcp/internal/services/market_service.go:502`、`jcp/internal/services/screening_daily_bar_source.go:38`、`jcp/internal/services/baostock_daily_bar_source.go:116`、`jcp/internal/services/market_service.go:573`。
@@ -56,8 +56,9 @@
 4. 之后查询服务再生成 SQL，校验来源表、列顺序、`ORDER BY` 和 `LIMIT` 规则后执行，并把 SQL 与结果快照保存到历史表；生成 SQL 的超时现在优先读取当前 AI 配置的 `timeout`，不再固定死为 45 秒。
 5. 查询进行中，左上结果区会显示当前阶段、百分比和最近日志；当阶段为 `reasoning` 时，进度卡标题显示“AI 正在思考”，流式区域展示连续自然语言摘要；当阶段切到 `generate_sql` 时，同一块区域继续显示 SQL 草稿，见 `jcp/frontend/src/components/ScreeningResultList.tsx:125`、`jcp/frontend/src/components/ScreeningResultList.tsx:143`、`jcp/frontend/src/components/ScreeningResultList.tsx:272`。
 6. 结果区的页签现在位于标题和数量说明上方，当前结果和历史结果都沿用同一套布局；如果本次筛选没有命中结果，左侧会明确显示“没有符合条件的结果”。如果有结果，前端仍会默认选中第一只股票并加载详情，见 `jcp/frontend/src/components/ScreeningResultList.tsx:51`、`jcp/frontend/src/components/ScreeningResultList.tsx:171`、`jcp/frontend/src/App.tsx:146`、`jcp/frontend/src/App.tsx:518`。
-7. 切到“历史筛选结果”页签后，左侧整栏显示历史记录列表；点击任意一条记录，前端会先读取当次保存的结果快照，再切回“当前筛选结果”页签显示。
-8. 如果当前结果来源于历史记录，且用户没有修改输入框，工作区按钮会显示“根据历史筛选方式重新筛选”；这时点击会直接走 `RerunScreeningHistoryRun` 复用历史 `generated_sql` 重跑，并写出一条新的历史记录。只要用户修改输入框文字，前端就会退出这个历史重跑态，按钮切回“开始筛选”，下一次执行重新生成 SQL，见 `jcp/frontend/src/components/ScreeningWorkspace.tsx:74`、`jcp/frontend/src/App.tsx:746`、`jcp/frontend/src/App.tsx:1290`。
+7. 切到“历史筛选结果”页签后，左侧整栏显示历史记录列表；点击任意一条记录，前端会先读取当次保存的结果快照，再切回“当前筛选结果”页签显示。每条历史右上角有 `X` 按钮，点击后会弹出确认框；确认后删除该条历史及其结果快照。
+8. 如果当前结果来源于历史记录，且用户没有修改输入框，工作区按钮会显示“根据历史筛选方式重新筛选”；一旦提示词被改动，按钮立即切回“开始筛选”。
+9. 无论按钮文案是什么，真正点击执行时都会先弹出范围确认框。只有提示词、市场范围、结果模式、结果条数和测试范围都未变化时，前端才调用 `RerunScreeningHistoryRun` 或 `RerunScreeningHistoryRunWithUniverse` 复用历史 `generated_sql`；只要范围或筛选条件变了，就重新调用 `RunScreeningQuery` 让模型生成新 SQL。复用 SQL 时，查询仍会在当前 SQLite 数据库和本次确认后的股票范围上执行，因此命中的是最新股票数据，不是历史缓存结果。
 9. 首页确认弹框中点击“设置”后，设置弹窗现在会覆盖在确认弹框之上，不再被遮挡。
 
 ## 在设置中调整 AI 筛选同步参数

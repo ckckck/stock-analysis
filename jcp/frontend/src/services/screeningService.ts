@@ -32,8 +32,29 @@ export const getScreeningHistoryRun = async (runId: number, page = 1, pageSize =
   return response;
 };
 
+export const deleteScreeningHistoryRun = async (runId: number): Promise<void> => {
+  const error = await (window as any).go.main.App.DeleteScreeningHistoryRun(runId);
+  if (error) {
+    throw new Error(error);
+  }
+};
+
 export const rerunScreeningHistoryRun = async (runId: number, page = 1, pageSize = 200): Promise<ScreeningQueryResponse> => {
   const response = normalizeScreeningQueryResponse(await RerunScreeningHistoryRun(runId, page, pageSize));
+  if (response.error) {
+    throw new Error(response.error);
+  }
+  return response;
+};
+
+export const rerunScreeningHistoryRunWithUniverse = async (
+  runId: number,
+  universeSymbols: string[],
+  page = 1,
+  pageSize = 200,
+): Promise<ScreeningQueryResponse> => {
+  const raw = await (window as any).go.main.App.RerunScreeningHistoryRunWithUniverse(runId, page, pageSize, universeSymbols);
+  const response = normalizeScreeningQueryResponse(raw);
   if (response.error) {
     throw new Error(response.error);
   }
@@ -55,8 +76,11 @@ const normalizeScreeningQueryResponse = (raw: any): ScreeningQueryResponse => ({
   runId: raw?.runId ?? raw?.RunID ?? 0,
   prompt: raw?.prompt ?? raw?.Prompt,
   marketScope: raw?.marketScope ?? raw?.MarketScope ?? '',
-  resultMode: raw?.resultMode ?? raw?.ResultMode ?? '',
+  resultMode: raw?.resultMode ?? raw?.ResultMode ?? 'top_n',
   resultLimit: raw?.resultLimit ?? raw?.ResultLimit ?? 0,
+  universeSymbols: Array.isArray(raw?.universeSymbols ?? raw?.UniverseSymbols)
+    ? (raw.universeSymbols ?? raw.UniverseSymbols).filter((item: unknown): item is string => typeof item === 'string')
+    : undefined,
   generatedSql: raw?.generatedSql ?? raw?.GeneratedSQL ?? '',
   totalCount: raw?.totalCount ?? raw?.TotalCount ?? 0,
   page: raw?.page ?? raw?.Page ?? 1,

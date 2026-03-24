@@ -570,6 +570,17 @@ func (a *App) GetScreeningHistoryRun(runID int64, page int, pageSize int) *servi
 	return response
 }
 
+// DeleteScreeningHistoryRun 删除一条历史筛选记录。
+func (a *App) DeleteScreeningHistoryRun(runID int64) string {
+	if a.screeningQuery == nil {
+		return "screening query service unavailable"
+	}
+	if err := a.screeningQuery.DeleteRun(runID); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
 // RerunScreeningHistoryRun 基于历史 SQL 重新执行一次筛选，并生成新的历史记录。
 func (a *App) RerunScreeningHistoryRun(runID int64, page int, pageSize int) *services.ScreeningQueryResponse {
 	if a.screeningQuery == nil {
@@ -582,6 +593,28 @@ func (a *App) RerunScreeningHistoryRun(runID int64, page int, pageSize int) *ser
 	defer a.clearScreeningQueryCancel(token)
 
 	response, err := a.screeningQuery.RerunHistoryRunWithContext(queryCtx, runID, page, pageSize, func(progress services.ScreeningQueryProgress) {
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "screening:query:progress", progress)
+		}
+	})
+	if err != nil {
+		return &services.ScreeningQueryResponse{Error: err.Error()}
+	}
+	return response
+}
+
+// RerunScreeningHistoryRunWithUniverse 基于历史 SQL 在指定股票范围内重新执行一次筛选，并生成新的历史记录。
+func (a *App) RerunScreeningHistoryRunWithUniverse(runID int64, page int, pageSize int, universeSymbols []string) *services.ScreeningQueryResponse {
+	if a.screeningQuery == nil {
+		return &services.ScreeningQueryResponse{Error: "screening query service unavailable"}
+	}
+
+	a.cancelScreeningQueryInternal()
+	queryCtx, cancel := context.WithCancel(context.Background())
+	token := a.setScreeningQueryCancel(cancel)
+	defer a.clearScreeningQueryCancel(token)
+
+	response, err := a.screeningQuery.RerunHistoryRunWithUniverseWithContext(queryCtx, runID, page, pageSize, universeSymbols, func(progress services.ScreeningQueryProgress) {
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "screening:query:progress", progress)
 		}

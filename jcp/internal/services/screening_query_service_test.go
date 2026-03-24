@@ -744,6 +744,60 @@ LIMIT 2
 	}
 }
 
+func TestScreeningQueryRerunHistoryRunWithUniverseOverridesStoredScope(t *testing.T) {
+	configService, store := newScreeningSyncTestServices(t)
+	seedScreeningQueryFixture(t, store)
+
+	service := NewScreeningQueryService(configService, store, &fakeScreeningSQLGenerator{
+		sql: `
+SELECT
+  symbol,
+  name,
+  change_percent AS score,
+  snapshot_trade_date,
+  price,
+  change_percent,
+  volume,
+  amount
+FROM v_stock_latest_daily
+ORDER BY change_percent DESC
+LIMIT 1
+`,
+	})
+
+	first, err := service.Run(context.Background(), ScreeningQueryRequest{
+		Prompt:          "在测试范围里找涨幅最高的一只股票",
+		ResultMode:      ScreeningResultModeTopN,
+		ResultLimit:     1,
+		Page:            1,
+		PageSize:        50,
+		UniverseSymbols: []string{"sh600000"},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(first.Results) != 1 || first.Results[0].Symbol != "sh600000" {
+		t.Fatalf("first results = %#v, want sh600000 only", first.Results)
+	}
+
+	rerun, err := service.RerunHistoryRunWithUniverse(first.RunID, 1, 50, []string{"sz000001"})
+	if err != nil {
+		t.Fatalf("RerunHistoryRunWithUniverse() error = %v", err)
+	}
+	if rerun == nil {
+		t.Fatalf("RerunHistoryRunWithUniverse() response = nil")
+	}
+	if rerun.GeneratedSQL != first.GeneratedSQL {
+		t.Fatalf("rerun.GeneratedSQL = %q, want %q", rerun.GeneratedSQL, first.GeneratedSQL)
+	}
+	if !reflect.DeepEqual(rerun.UniverseSymbols, []string{"sz000001"}) {
+		t.Fatalf("rerun.UniverseSymbols = %#v, want %#v", rerun.UniverseSymbols, []string{"sz000001"})
+	}
+	if len(rerun.Results) != 1 || rerun.Results[0].Symbol != "sz000001" {
+		t.Fatalf("rerun results = %#v, want sz000001 only", rerun.Results)
+	}
+}
+
 type fakeScreeningSQLGenerator struct {
 	sql                 string
 	reasoning           string

@@ -632,6 +632,9 @@ func screeningStockIdentity(
 	case strings.HasSuffix(tsCode, ".SH"):
 		return "sh" + symbol, "上海", scopes.Shanghai
 	case strings.HasSuffix(tsCode, ".SZ"):
+		if strings.HasPrefix(symbol, "300") || strings.HasPrefix(symbol, "301") {
+			return "", "", false
+		}
 		return "sz" + symbol, "深圳", scopes.Shenzhen
 	case strings.HasSuffix(tsCode, ".BJ"):
 		return "bj" + symbol, "北京", scopes.Beijing

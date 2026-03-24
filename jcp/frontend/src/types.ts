@@ -174,8 +174,9 @@ export interface ScreeningQueryResponse {
   runId: number;
   prompt?: string;
   marketScope: string;
-  resultMode: string;
+  resultMode: ScreeningResultMode;
   resultLimit: number;
+  universeSymbols?: string[];
   generatedSql: string;
   totalCount: number;
   page: number;
@@ -208,7 +209,7 @@ export interface ScreeningHistoryItem {
   runId: number;
   prompt: string;
   marketScope: string;
-  resultMode: string;
+  resultMode: ScreeningResultMode;
   resultLimit: number;
   matchedCount: number;
   createdAt: string;

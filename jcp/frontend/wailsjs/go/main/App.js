@@ -50,6 +50,10 @@ export function DeleteMCPServer(arg1) {
   return window['go']['main']['App']['DeleteMCPServer'](arg1);
 }
 
+export function DeleteScreeningHistoryRun(arg1) {
+  return window['go']['main']['App']['DeleteScreeningHistoryRun'](arg1);
+}
+
 export function DeleteStrategy(arg1) {
   return window['go']['main']['App']['DeleteStrategy'](arg1);
 }
@@ -200,6 +204,10 @@ export function RemoveFromWatchlist(arg1) {
 
 export function RerunScreeningHistoryRun(arg1, arg2, arg3) {
   return window['go']['main']['App']['RerunScreeningHistoryRun'](arg1, arg2, arg3);
+}
+
+export function RerunScreeningHistoryRunWithUniverse(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['RerunScreeningHistoryRunWithUniverse'](arg1, arg2, arg3, arg4);
 }
 
 export function RestartApp() {

@@ -7,7 +7,7 @@ interface ScreeningWorkspaceProps {
   prompt: string;
   resultPreset: string;
   loading: boolean;
-  canReuseHistorySql?: boolean;
+  showHistoryRerunLabel?: boolean;
   generatedSql: string;
   canCancel?: boolean;
   onPromptChange: (value: string) => void;
@@ -21,7 +21,7 @@ export const ScreeningWorkspace: React.FC<ScreeningWorkspaceProps> = ({
   prompt,
   resultPreset,
   loading,
-  canReuseHistorySql = false,
+  showHistoryRerunLabel = false,
   generatedSql,
   canCancel = false,
   onPromptChange,
@@ -81,7 +81,7 @@ export const ScreeningWorkspace: React.FC<ScreeningWorkspaceProps> = ({
               {loading ? <Sparkles className="h-4 w-4 animate-pulse" /> : <ArrowRight className="h-4 w-4" />}
               {resolveScreeningPrimaryActionLabel({
                 loading,
-                canReuseHistorySql,
+                showHistoryRerunLabel,
               })}
             </button>
           </div>

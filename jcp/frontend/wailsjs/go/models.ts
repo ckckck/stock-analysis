@@ -1184,6 +1184,7 @@ export namespace services {
 	    marketScope: string;
 	    resultMode: string;
 	    resultLimit: number;
+	    universeSymbols?: string[];
 	    generatedSql: string;
 	    totalCount: number;
 	    page: number;
@@ -1203,6 +1204,7 @@ export namespace services {
 	        this.marketScope = source["marketScope"];
 	        this.resultMode = source["resultMode"];
 	        this.resultLimit = source["resultLimit"];
+	        this.universeSymbols = source["universeSymbols"];
 	        this.generatedSql = source["generatedSql"];
 	        this.totalCount = source["totalCount"];
 	        this.page = source["page"];

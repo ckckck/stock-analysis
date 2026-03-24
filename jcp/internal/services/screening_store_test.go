@@ -328,6 +328,65 @@ func TestScreeningStoreGetLatestDailyBarTradeDatesForSymbols(t *testing.T) {
 	}
 }
 
+func TestScreeningStoreDeleteScreeningRunRemovesRunAndResults(t *testing.T) {
+	tempDir := t.TempDir()
+
+	store, err := NewScreeningStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewScreeningStore() error = %v", err)
+	}
+	defer store.Close()
+
+	runID, err := store.CreateScreeningRun(ScreeningRun{
+		Prompt:       "删除测试",
+		MarketScope:  "shanghai,shenzhen",
+		ResultMode:   "top_n",
+		ResultLimit:  10,
+		GeneratedSQL: "SELECT symbol FROM v_stock_latest_daily ORDER BY change_percent DESC LIMIT 10",
+		MatchedCount: 1,
+		CreatedAt:    time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("CreateScreeningRun() error = %v", err)
+	}
+
+	if err := store.ReplaceScreeningRunResults(runID, []ScreeningRunResult{
+		{
+			Symbol:            "sh600000",
+			Name:              "浦发银行",
+			Rank:              1,
+			Score:             10,
+			SnapshotTradeDate: "2026-03-24",
+			Price:             10.5,
+			ChangePercent:     1.2,
+			Volume:            1000,
+			Amount:            10000,
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceScreeningRunResults() error = %v", err)
+	}
+
+	if err := store.DeleteScreeningRun(runID); err != nil {
+		t.Fatalf("DeleteScreeningRun() error = %v", err)
+	}
+
+	run, err := store.GetScreeningRun(runID)
+	if err != nil {
+		t.Fatalf("GetScreeningRun() error = %v", err)
+	}
+	if run != nil {
+		t.Fatalf("GetScreeningRun() = %#v, want nil", run)
+	}
+
+	results, err := store.ListScreeningRunResults(runID)
+	if err != nil {
+		t.Fatalf("ListScreeningRunResults() error = %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("len(ListScreeningRunResults()) = %d, want 0", len(results))
+	}
+}
+
 func assertSQLiteObjectExists(t *testing.T, db *sql.DB, objectType, name string) {
 	t.Helper()
 
