@@ -27,6 +27,7 @@
         background-color: var(--bg-0);
         text-align: center;
         color: var(--text-0);
+        font-size: 100%;
     }
 
     body {

@@ -516,6 +516,8 @@ export namespace models {
 	    leftPanelWidth: number;
 	    rightPanelWidth: number;
 	    bottomPanelHeight: number;
+	    textScalePercent: number;
+	    klineZoomPercent: number;
 	    windowWidth: number;
 	    windowHeight: number;
 	
@@ -528,6 +530,8 @@ export namespace models {
 	        this.leftPanelWidth = source["leftPanelWidth"];
 	        this.rightPanelWidth = source["rightPanelWidth"];
 	        this.bottomPanelHeight = source["bottomPanelHeight"];
+	        this.textScalePercent = source["textScalePercent"];
+	        this.klineZoomPercent = source["klineZoomPercent"];
 	        this.windowWidth = source["windowWidth"];
 	        this.windowHeight = source["windowHeight"];
 	    }

@@ -113,6 +113,103 @@ func TestConfigServicePreservesScreeningConfigAcrossReload(t *testing.T) {
 	})
 }
 
+func TestConfigServiceAddsLayoutTextScaleDefaultForLegacyConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.json")
+
+	legacyConfig := map[string]any{
+		"theme":           "light",
+		"candleColorMode": "red-up",
+		"aiConfigs":       []any{},
+		"layout": map[string]any{
+			"leftPanelWidth":    320,
+			"rightPanelWidth":   420,
+			"bottomPanelHeight": 200,
+		},
+		"indicators": map[string]any{
+			"ma": map[string]any{
+				"enabled": true,
+				"periods": []int{5, 10, 20},
+			},
+		},
+	}
+
+	writeJSONFile(t, configPath, legacyConfig)
+
+	cs, err := NewConfigService(tempDir)
+	if err != nil {
+		t.Fatalf("NewConfigService() error = %v", err)
+	}
+
+	raw, err := json.Marshal(cs.GetConfig())
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	layout, ok := payload["layout"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected layout config in payload, got %#v", payload["layout"])
+	}
+
+	if got := layout["textScalePercent"]; got != float64(100) {
+		t.Fatalf("expected default textScalePercent 100, got %#v", got)
+	}
+}
+
+func TestConfigServiceAddsLayoutKlineZoomDefaultForLegacyConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.json")
+
+	legacyConfig := map[string]any{
+		"theme":           "light",
+		"candleColorMode": "red-up",
+		"aiConfigs":       []any{},
+		"layout": map[string]any{
+			"leftPanelWidth":    320,
+			"rightPanelWidth":   420,
+			"bottomPanelHeight": 200,
+			"textScalePercent":  110,
+		},
+		"indicators": map[string]any{
+			"ma": map[string]any{
+				"enabled": true,
+				"periods": []int{5, 10, 20},
+			},
+		},
+	}
+
+	writeJSONFile(t, configPath, legacyConfig)
+
+	cs, err := NewConfigService(tempDir)
+	if err != nil {
+		t.Fatalf("NewConfigService() error = %v", err)
+	}
+
+	raw, err := json.Marshal(cs.GetConfig())
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	layout, ok := payload["layout"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected layout config in payload, got %#v", payload["layout"])
+	}
+
+	if got := layout["klineZoomPercent"]; got != float64(100) {
+		t.Fatalf("expected default klineZoomPercent 100, got %#v", got)
+	}
+}
+
 func writeJSONFile(t *testing.T, path string, value any) {
 	t.Helper()
 

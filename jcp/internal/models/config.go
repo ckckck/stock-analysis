@@ -100,6 +100,8 @@ type LayoutConfig struct {
 	LeftPanelWidth    int `json:"leftPanelWidth"`    // 左侧面板宽度(px)
 	RightPanelWidth   int `json:"rightPanelWidth"`   // 右侧面板宽度(px)
 	BottomPanelHeight int `json:"bottomPanelHeight"` // 底部面板高度(px)
+	TextScalePercent  int `json:"textScalePercent"`  // 全局文字缩放百分比
+	KlineZoomPercent  int `json:"klineZoomPercent"`  // K线图缩放百分比
 	WindowWidth       int `json:"windowWidth"`       // 窗口宽度(px)
 	WindowHeight      int `json:"windowHeight"`      // 窗口高度(px)
 }

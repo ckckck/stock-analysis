@@ -182,6 +182,10 @@ export function ListScreeningHistory(arg1) {
   return window['go']['main']['App']['ListScreeningHistory'](arg1);
 }
 
+export function LogFrontendDebug(arg1, arg2, arg3) {
+  return window['go']['main']['App']['LogFrontendDebug'](arg1, arg2, arg3);
+}
+
 export function NotifyFrontendReady() {
   return window['go']['main']['App']['NotifyFrontendReady']();
 }

@@ -62,6 +62,10 @@ func (cs *ConfigService) loadConfig() error {
 
 	// 用于识别字段是否在 JSON 中显式存在（避免把用户明确设置的 false 当成缺失字段）
 	var raw struct {
+		Layout *struct {
+			TextScalePercent *int `json:"textScalePercent"`
+			KlineZoomPercent *int `json:"klineZoomPercent"`
+		} `json:"layout"`
 		Screening *struct {
 			Markets *struct {
 				Shanghai *bool `json:"shanghai"`
@@ -105,6 +109,7 @@ func (cs *ConfigService) loadConfig() error {
 	// 旧配置文件可能缺少 indicators 字段，Go 零值（nil/0/0.0）会导致前端异常
 	// 用默认值补全所有未设置的字段
 	defaultConfig := cs.defaultConfig()
+	applyLayoutDefaults(&config, raw.Layout, defaultConfig.Layout)
 	applyScreeningDefaults(&config, raw.Screening, defaultConfig.Screening)
 
 	d := defaultConfig.Indicators
@@ -186,6 +191,10 @@ func (cs *ConfigService) defaultConfig() *models.AppConfig {
 			RSI:  models.RSIConfig{Enabled: false, Period: 14},
 			KDJ:  models.KDJConfig{Enabled: false, Period: 9, K: 3, D: 3},
 		},
+		Layout: models.LayoutConfig{
+			TextScalePercent: 100,
+			KlineZoomPercent: 100,
+		},
 		Screening: models.ScreeningConfig{
 			Markets: models.ScreeningMarketScopeConfig{
 				Shanghai: true,
@@ -201,6 +210,27 @@ func (cs *ConfigService) defaultConfig() *models.AppConfig {
 			DefaultResultLimit: 100,
 			SQLTimeoutSeconds:  0,
 		},
+	}
+}
+
+func applyLayoutDefaults(
+	config *models.AppConfig,
+	raw *struct {
+		TextScalePercent *int `json:"textScalePercent"`
+		KlineZoomPercent *int `json:"klineZoomPercent"`
+	},
+	defaults models.LayoutConfig,
+) {
+	if raw == nil {
+		config.Layout.TextScalePercent = defaults.TextScalePercent
+		return
+	}
+
+	if raw.TextScalePercent == nil || config.Layout.TextScalePercent == 0 {
+		config.Layout.TextScalePercent = defaults.TextScalePercent
+	}
+	if raw.KlineZoomPercent == nil || config.Layout.KlineZoomPercent == 0 {
+		config.Layout.KlineZoomPercent = defaults.KlineZoomPercent
 	}
 }
 

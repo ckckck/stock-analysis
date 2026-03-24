@@ -25,6 +25,7 @@ import (
 )
 
 var log = logger.New("app")
+var frontendLog = logger.New("frontend")
 
 type screeningSQLGeneratorAdapter struct {
 	configService *services.ConfigService
@@ -361,6 +362,10 @@ func (a *App) shutdown(ctx context.Context) {
 // Greet returns a greeting for the given name
 func (a *App) Greet(name string) string {
 	return "Hello " + name + ", It's show time!"
+}
+
+func (a *App) LogFrontendDebug(scope string, message string, payload string) {
+	frontendLog.Debug("[%s] %s %s", scope, message, strings.TrimSpace(payload))
 }
 
 // GetConfig 获取配置

@@ -97,6 +97,8 @@ export function Greet(arg1:string):Promise<string>;
 
 export function ListScreeningHistory(arg1:number):Promise<services.ScreeningHistoryResponse>;
 
+export function LogFrontendDebug(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function NotifyFrontendReady():Promise<void>;
 
 export function OpenURL(arg1:string):Promise<void>;
