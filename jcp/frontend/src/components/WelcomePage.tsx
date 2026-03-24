@@ -1,30 +1,49 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Stock } from '../types';
 import { searchStocks, StockSearchResult } from '../services/stockService';
-import { Search, TrendingUp, X, Settings } from 'lucide-react';
+import { Search, TrendingUp, X, Settings, Sparkles } from 'lucide-react';
 import { WindowClose } from '../../wailsjs/go/main/App';
 import { useTheme } from '../contexts/ThemeContext';
 import logo from '../assets/images/logo.png';
 
 interface WelcomePageProps {
+  screeningPrompt: string;
+  onScreeningPromptChange: (value: string) => void;
+  onSubmitScreening: () => void;
+  screeningSubmitting: boolean;
   onAddStock: (stock: Stock) => void;
+  hasExistingWorkspace?: boolean;
+  onOpenWatchlist?: () => void;
+  onOpenScreening?: () => void;
   onOpenSettings?: () => void;
 }
 
-export const WelcomePage: React.FC<WelcomePageProps> = ({ onAddStock, onOpenSettings }) => {
+export const WelcomePage: React.FC<WelcomePageProps> = ({
+  screeningPrompt,
+  onScreeningPromptChange,
+  onSubmitScreening,
+  screeningSubmitting,
+  onAddStock,
+  hasExistingWorkspace = false,
+  onOpenWatchlist,
+  onOpenScreening,
+  onOpenSettings,
+}) => {
   const { colors } = useTheme();
-  const [searchTerm, setSearchTerm] = useState('');
-  const [searchResults, setSearchResults] = useState<StockSearchResult[]>([]);
-  const [showDropdown, setShowDropdown] = useState(false);
-  const [isSearching, setIsSearching] = useState(false);
+  const [entryMode, setEntryMode] = useState<'screening' | 'watchlist'>('screening');
+  const [stockSearchTerm, setStockSearchTerm] = useState('');
+  const [stockSearchResults, setStockSearchResults] = useState<StockSearchResult[]>([]);
+  const [showStockDropdown, setShowStockDropdown] = useState(false);
+  const [isSearchingStock, setIsSearchingStock] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const isScreeningMode = entryMode === 'screening';
 
   // 点击外部关闭下拉
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setShowDropdown(false);
+        setShowStockDropdown(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -37,25 +56,26 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onAddStock, onOpenSett
       clearTimeout(debounceRef.current);
     }
 
-    if (!searchTerm.trim()) {
-      setSearchResults([]);
-      setShowDropdown(false);
+    if (entryMode !== 'watchlist' || !stockSearchTerm.trim()) {
+      setStockSearchResults([]);
+      setShowStockDropdown(false);
+      setIsSearchingStock(false);
       return;
     }
 
-    setIsSearching(true);
+    setIsSearchingStock(true);
     debounceRef.current = setTimeout(async () => {
-      const results = await searchStocks(searchTerm);
+      const results = await searchStocks(stockSearchTerm);
       const safeResults = Array.isArray(results) ? results : [];
-      setSearchResults(safeResults);
-      setShowDropdown(safeResults.length > 0);
-      setIsSearching(false);
+      setStockSearchResults(safeResults);
+      setShowStockDropdown(safeResults.length > 0);
+      setIsSearchingStock(false);
     }, 300);
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [searchTerm]);
+  }, [entryMode, stockSearchTerm]);
 
   const handleSelectResult = (result: StockSearchResult) => {
     const newStock: Stock = {
@@ -74,6 +94,24 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onAddStock, onOpenSett
       preClose: 0,
     };
     onAddStock(newStock);
+    setStockSearchTerm('');
+    setStockSearchResults([]);
+    setShowStockDropdown(false);
+  };
+
+  const handleSubmitPrimary = () => {
+    if (isScreeningMode) {
+      if (screeningSubmitting) return;
+      onSubmitScreening();
+      return;
+    }
+
+    if (isSearchingStock) return;
+    if (stockSearchResults.length === 1) {
+      handleSelectResult(stockSearchResults[0]);
+      return;
+    }
+    setShowStockDropdown(stockSearchResults.length > 0);
   };
 
   return (
@@ -109,65 +147,151 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onAddStock, onOpenSett
         </div>
       </div>
 
-      {/* 搜索框 */}
-      <div ref={searchRef} className="w-96 relative" style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}>
-        <div className="relative">
-          <Search className={`absolute left-4 top-3.5 h-5 w-5 ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`} />
+      <div className="w-[34rem] max-w-[calc(100vw-3rem)]" style={{ '--wails-draggable': 'no-drag' } as React.CSSProperties}>
+        <div className="mb-3 flex justify-center">
+          <div className={`inline-flex rounded-full border p-1 ${colors.isDark ? 'border-slate-700 bg-slate-900/45' : 'border-slate-300 bg-white/85'}`}>
+            <button
+              type="button"
+              onClick={() => {
+                setEntryMode('screening');
+                setShowStockDropdown(false);
+              }}
+              className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
+                isScreeningMode
+                  ? 'bg-accent text-white'
+                  : `${colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'}`
+              }`}
+            >
+              AI 筛选
+            </button>
+            <button
+              type="button"
+              onClick={() => setEntryMode('watchlist')}
+              className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
+                !isScreeningMode
+                  ? 'bg-accent text-white'
+                  : `${colors.isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'}`
+              }`}
+            >
+              自选
+            </button>
+          </div>
+        </div>
+
+        <div ref={searchRef} className="relative">
+          {isScreeningMode ? (
+            <Sparkles className={`absolute left-4 top-4 h-5 w-5 ${colors.isDark ? 'text-amber-300' : 'text-amber-500'}`} />
+          ) : (
+            <Search className={`absolute left-4 top-4 h-5 w-5 ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`} />
+          )}
           <input
             type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            onFocus={() => searchResults.length > 0 && setShowDropdown(true)}
-            placeholder="搜索股票代码或名称，添加自选股..."
-            className={`w-full rounded-xl pl-12 pr-4 py-3 text-base focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all ${
+            value={isScreeningMode ? screeningPrompt : stockSearchTerm}
+            onChange={(e) => {
+              if (isScreeningMode) {
+                onScreeningPromptChange(e.target.value);
+              } else {
+                setStockSearchTerm(e.target.value);
+              }
+            }}
+            onFocus={() => {
+              if (!isScreeningMode && stockSearchResults.length > 0) {
+                setShowStockDropdown(true);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSubmitPrimary();
+              }
+            }}
+            placeholder={
+              isScreeningMode
+                ? '描述你的筛选条件，例如：最近20日放量上涨、非ST、成交额大于5亿'
+                : '搜索股票代码或名称，添加到自选'
+            }
+            className={`w-full rounded-2xl border pl-12 pr-32 py-4 text-base shadow-xl focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/40 transition-all ${
               colors.isDark
-                ? 'bg-slate-800/80 border border-slate-600 text-white placeholder-slate-500'
-                : 'bg-white/90 border border-slate-300 text-slate-800 placeholder-slate-400'
+                ? 'bg-slate-800/85 border-slate-600 text-white placeholder-slate-500'
+                : 'bg-white/95 border-slate-300 text-slate-800 placeholder-slate-400'
             }`}
             autoFocus
           />
-          {isSearching && (
-            <div className="absolute right-4 top-3.5 h-5 w-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+          <button
+            type="button"
+            onClick={handleSubmitPrimary}
+            disabled={isScreeningMode ? (!screeningPrompt.trim() || screeningSubmitting) : !stockSearchTerm.trim()}
+            className="absolute right-3 top-2.5 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)] px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {(screeningSubmitting || isSearchingStock) && (
+              <span className="h-4 w-4 rounded-full border-2 border-white/80 border-t-transparent animate-spin" />
+            )}
+            <span>{isScreeningMode ? 'AI 筛选' : '搜索单只股票'}</span>
+          </button>
+
+          {!isScreeningMode && showStockDropdown && (
+            <div className={`absolute left-0 right-0 top-[4.5rem] z-10 max-h-72 overflow-y-auto rounded-2xl border shadow-2xl ${
+              colors.isDark
+                ? 'border-slate-600 bg-slate-800'
+                : 'border-slate-200 bg-white'
+            }`}>
+              {stockSearchResults.map((result) => (
+                <div
+                  key={result.symbol}
+                  onClick={() => handleSelectResult(result)}
+                  className={`px-4 py-3 cursor-pointer first:rounded-t-2xl last:rounded-b-2xl ${
+                    colors.isDark
+                      ? 'hover:bg-slate-700 border-b border-slate-700 last:border-b-0'
+                      : 'hover:bg-slate-100 border-b border-slate-200 last:border-b-0'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className={`font-medium ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>{result.name}</span>
+                      <span className="ml-2 font-mono text-sm text-accent-2">{result.symbol}</span>
+                    </div>
+                    <span className={`text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>{result.market}</span>
+                  </div>
+                  {result.industry && (
+                    <div className={`mt-1 text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>{result.industry}</div>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
 
-        {/* 搜索下拉结果 */}
-        {showDropdown && (
-          <div className={`absolute top-full left-0 right-0 mt-2 max-h-80 overflow-y-auto rounded-xl shadow-2xl ${
-            colors.isDark
-              ? 'bg-slate-800 border border-slate-600'
-              : 'bg-white border border-slate-200'
-          }`}>
-            {searchResults.map((result) => (
-              <div
-                key={result.symbol}
-                onClick={() => handleSelectResult(result)}
-                className={`px-4 py-3 cursor-pointer first:rounded-t-xl last:rounded-b-xl ${
-                  colors.isDark
-                    ? 'hover:bg-slate-700 border-b border-slate-700 last:border-b-0'
-                    : 'hover:bg-slate-100 border-b border-slate-200 last:border-b-0'
-                }`}
-              >
-                <div className="flex justify-between items-center">
-                  <div>
-                    <span className={`font-medium ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>{result.name}</span>
-                    <span className="ml-2 font-mono text-accent-2 text-sm">{result.symbol}</span>
-                  </div>
-                  <span className={`text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>{result.market}</span>
-                </div>
-                {result.industry && (
-                  <div className={`text-xs mt-1 ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>{result.industry}</div>
-                )}
-              </div>
-            ))}
+        <div className={`mt-4 flex items-center justify-center gap-2 text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+          <TrendingUp className="h-4 w-4" />
+          <span>{isScreeningMode ? '用自然语言描述筛选方式' : '搜索单只股票并加入自选'}</span>
+        </div>
+
+        {hasExistingWorkspace && (
+          <div className="mt-5 flex items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={onOpenWatchlist}
+              className={`rounded-full border px-4 py-2 text-sm transition-colors ${
+                colors.isDark
+                  ? 'border-slate-600 bg-slate-800/70 text-slate-200 hover:text-white'
+                  : 'border-slate-300 bg-white/85 text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              进入自选
+            </button>
+            <button
+              type="button"
+              onClick={onOpenScreening}
+              className={`rounded-full border px-4 py-2 text-sm transition-colors ${
+                colors.isDark
+                  ? 'border-slate-600 bg-slate-800/70 text-slate-200 hover:text-white'
+                  : 'border-slate-300 bg-white/85 text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              进入 AI 筛选
+            </button>
           </div>
         )}
-      </div>
-
-      {/* 提示文字 */}
-      <div className={`mt-6 flex items-center gap-2 text-sm ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-        <TrendingUp className="h-4 w-4" />
-        <span>搜索并添加您的第一只自选股开始使用</span>
       </div>
     </div>
   );

@@ -6,9 +6,9 @@
 
 ## 2. 概述
 
-- 主界面围绕三块能力组织：自选股与市场指数、K 线与盘口、AI 讨论室；前端主组件直接引入这些模块并维护布局、行情、会话和弹窗状态，见 `jcp/frontend/src/App.tsx:2`、`jcp/frontend/src/App.tsx:46`、`jcp/frontend/src/App.tsx:72`。
-- 后端 `App` 在启动时组装配置、行情、新闻、热点、龙虎榜、会议、会话、策略、工具注册、MCP、记忆、更新和 OpenClaw 服务，说明项目是“桌面 UI + 本地服务编排”的结构，而不是单一行情看板，见 `jcp/app.go:28`、`jcp/app.go:52`、`jcp/app.go:82`、`jcp/app.go:91`、`jcp/app.go:129`、`jcp/app.go:139`、`jcp/app.go:142`。
-- 暴露给前端的 API 覆盖自选股、实时行情、K 线、盘口、会话消息、持仓、策略、AI 会议、MCP、热点、更新和龙虎榜，见 `jcp/app.go:335`、`jcp/app.go:396`、`jcp/app.go:402`、`jcp/app.go:452`、`jcp/app.go:498`、`jcp/app.go:614`、`jcp/app.go:708`、`jcp/app.go:783`、`jcp/app.go:1092`、`jcp/app.go:1230`、`jcp/app.go:1253`、`jcp/app.go:1313`。
+- 主界面围绕四块能力组织：自选股与市场指数、AI 筛选结果/工作区、K 线与盘口、AI 讨论室；前端主组件直接维护模式切换、筛选结果、历史回放、布局、行情、会话和弹窗状态，见 `jcp/frontend/src/App.tsx:62`、`jcp/frontend/src/App.tsx:83`、`jcp/frontend/src/App.tsx:359`、`jcp/frontend/src/App.tsx:543`、`jcp/frontend/src/App.tsx:675`。
+- 后端 `App` 在启动时组装配置、行情、AI 筛选存储/同步/调度/查询、新闻、热点、龙虎榜、会议、会话、策略、工具注册、MCP、记忆、更新和 OpenClaw 服务，说明项目是“桌面 UI + 本地服务编排”的结构，而不是单一行情看板，见 `jcp/app.go:73`、`jcp/app.go:129`、`jcp/app.go:137`、`jcp/app.go:139`、`jcp/app.go:237`。
+- 暴露给前端的 API 覆盖自选股、实时行情、K 线、盘口、AI 筛选同步、AI 筛选查询/历史回放、会话消息、持仓、策略、AI 会议、MCP、热点、更新和龙虎榜，见 `jcp/app.go:335`、`jcp/app.go:370`、`jcp/app.go:383`、`jcp/app.go:396`、`jcp/app.go:409`、`jcp/app.go:422`、`jcp/app.go:452`、`jcp/app.go:783`、`jcp/app.go:1092`、`jcp/app.go:1230`、`jcp/app.go:1253`、`jcp/app.go:1313`。
 - 配置模型支持多 AI 提供商、MCP Server、记忆、代理、布局、OpenClaw 和技术指标，说明产品核心不是固定单模型问答，而是可配置的分析工作台，见 `jcp/internal/models/config.go:13`、`jcp/internal/models/config.go:44`、`jcp/internal/models/config.go:56`。
 - 当前技术栈由 Go 1.24、Wails v2、React 18、Vite、TypeScript、Tailwind、Lightweight Charts 组成；运行和构建命令在仓库 README 中明确给出，见 `jcp/go.mod:1`、`jcp/frontend/package.json:6`、`jcp/frontend/package.json:11`、`jcp/README.md:71`。
 
@@ -16,6 +16,8 @@
 
 - 行情能力：支持实时行情、K 线、盘口、交易日历和交易状态；行情层自带短 TTL 缓存与定时清理，见 `jcp/app.go:396`、`jcp/app.go:402`、`jcp/app.go:408`、`jcp/app.go:1292`、`jcp/app.go:1304`、`jcp/internal/services/market_service.go:34`、`jcp/internal/services/market_service.go:108`、`jcp/internal/services/market_service.go:159`。
 - 自选与会话能力：自选股保存在配置服务中，单股票会话和持仓信息落到 `sessions/` 目录，见 `jcp/app.go:335`、`jcp/app.go:368`、`jcp/app.go:378`、`jcp/internal/services/config_service.go:29`、`jcp/internal/services/session_service.go:24`、`jcp/internal/services/session_service.go:45`。
+- AI 筛选能力：本地 `screening.db` 保存股票基础资料、日线、快照、同步状态、筛选历史和结果快照；筛选查询由 AI 把自然语言转成只读 SQL，再执行并保存历史。前端无论从欢迎页还是主工作区触发，都先进入统一确认弹框；执行期间再通过 `screening:query:progress` 展示阶段、百分比和日志。历史记录现在还能直接恢复到当前结果页，并基于保存的 `generated_sql` 重跑，生成新的历史记录；左下工作区在历史结果未改动时会显示“根据历史筛选方式重新筛选”，一旦用户修改输入框，就切回普通“开始筛选”并重新生成 SQL。见 `jcp/frontend/src/App.tsx:746`、`jcp/frontend/src/App.tsx:1290`、`jcp/frontend/src/components/ScreeningWorkspace.tsx:74`、`jcp/internal/services/screening_query_service.go`、`jcp/app.go`。
+- AI 筛选同步能力：默认面向沪市和深市日线，支持首次 30/60/90/120 天手动同步、后续按最近交易日增量补齐、可选 30 天/60 天清理、应用运行期定时同步，以及同步中的百分比进度、数据源切换记录、手动测试上限和断点续传取消；欢迎页首次筛选时还能把“本次测试同步子集”继续传给后续 AI 筛选请求，确保测试只落在同步过的那批股票上。顶部栏现在还提供一个独立同步状态按钮，基于 `syncedToLatestStocks/marketStockCount` 显示红黄绿状态和 `(已同步/总数)`，并复用同一套同步弹框进入“仅同步”模式；设置页左侧导航已不再保留“软件更新”入口。同步取数现为 `Baostock` 主源、Sina 日线备源，见 `jcp/frontend/src/App.tsx:224`、`jcp/frontend/src/App.tsx:315`、`jcp/frontend/src/App.tsx:1175`、`jcp/frontend/src/App.tsx:1527`、`jcp/frontend/src/components/SettingsDialog.tsx:57`、`jcp/frontend/src/components/SettingsDialog.tsx:313`、`jcp/internal/models/config.go:140`、`jcp/app.go:373`、`jcp/app.go:397`、`jcp/internal/services/screening_sync_service.go:144`、`jcp/internal/services/screening_scheduler.go:19`、`jcp/internal/services/market_service.go:502`、`jcp/internal/services/screening_daily_bar_source.go:29`、`jcp/internal/services/baostock_daily_bar_source.go:53`。
 - AI 分析能力：会议支持智能串行模式和直接 @ 专家模式，并包含进度事件、失败重试和继续执行，见 `jcp/internal/meeting/service.go:128`、`jcp/internal/meeting/service.go:171`、`jcp/internal/meeting/service.go:183`、`jcp/app.go:783`、`jcp/app.go:900`、`jcp/app.go:949`、`jcp/app.go:1007`。
 - 策略与专家能力：内置默认策略“均衡分析”，默认含 6 类专家并为不同角色分配工具集，见 `jcp/internal/services/strategy_service.go:23`、`jcp/internal/services/strategy_service.go:36`。
 - 工具与外部扩展：内置工具覆盖实时行情、K 线、盘口、快讯、搜索、研报、热点和龙虎榜；同时支持 MCP Server 配置与测试，见 `jcp/internal/adk/tools/registry.go:28`、`jcp/internal/adk/tools/registry.go:51`、`jcp/app.go:1099`、`jcp/app.go:1164`。
@@ -23,5 +25,5 @@
 
 ## 4. 目前缺口
 
-- `llmdoc` 目前只覆盖概览级信息，还没有展开到单个热点源、MCP 管理器和 OpenClaw `analyze` 请求/响应模型。
-- 若后续需要排查行为或同步上游变更，优先补 `architecture/` 下的会议执行链和 `reference/` 下的数据落盘约定。
+- `llmdoc` 仍未展开到单个热点源、MCP 管理器和 OpenClaw `analyze` 请求/响应模型。
+- AI 筛选目前已记录到系统图和工作流，但还没有单独整理 SQLite 表字段语义与 SQL prompt 模板演进历史。

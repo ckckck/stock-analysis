@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/run-bigpig/jcp/internal/embed"
 	"github.com/run-bigpig/jcp/internal/logger"
 	"github.com/run-bigpig/jcp/internal/models"
 	"github.com/run-bigpig/jcp/internal/pkg/paths"
@@ -46,6 +47,12 @@ var defaultIndexCodes = []string{
 	"s_sh000001", // 上证指数
 	"s_sz399001", // 深证成指
 	"s_sz399006", // 创业板指
+}
+
+var screeningIndexCatalog = []ScreeningStockBasic{
+	{Symbol: "sh000001", Name: "上证指数", Market: "指数", Industry: "指数", IsActive: true},
+	{Symbol: "sz399001", Name: "深证成指", Market: "指数", Industry: "指数", IsActive: true},
+	{Symbol: "sz399006", Name: "创业板指", Market: "指数", Industry: "指数", IsActive: true},
 }
 
 // StockWithOrderBook 包含盘口数据的股票信息
@@ -93,6 +100,8 @@ type TradingSchedule struct {
 // MarketService 市场数据服务
 type MarketService struct {
 	client *http.Client
+
+	screeningDailyBarSource screeningDailyBarSource
 
 	// 股票数据缓存
 	cache    map[string]*stockCache
@@ -446,6 +455,113 @@ func (ms *MarketService) GetKLineData(code string, period string, days int) ([]m
 	return klines, nil
 }
 
+// ListScreeningStocks 返回 AI 筛选同步使用的股票基础列表。
+func (ms *MarketService) ListScreeningStocks(scopes models.ScreeningMarketScopeConfig) ([]ScreeningStockBasic, error) {
+	var basicData stockBasicData
+	if err := json.Unmarshal(embed.StockBasicJSON, &basicData); err != nil {
+		return nil, err
+	}
+
+	fieldIndexes := make(map[string]int, len(basicData.Data.Fields))
+	for i, field := range basicData.Data.Fields {
+		fieldIndexes[field] = i
+	}
+
+	var stocks []ScreeningStockBasic
+	for _, item := range basicData.Data.Items {
+		tsCode := getStringField(item, fieldIndexes, "ts_code")
+		symbol := getStringField(item, fieldIndexes, "symbol")
+		name := getStringField(item, fieldIndexes, "name")
+		if tsCode == "" || symbol == "" || name == "" {
+			continue
+		}
+
+		fullSymbol, marketName, enabled := screeningStockIdentity(tsCode, symbol, scopes)
+		if !enabled {
+			continue
+		}
+
+		stocks = append(stocks, ScreeningStockBasic{
+			Symbol:   fullSymbol,
+			Name:     name,
+			Market:   marketName,
+			Industry: getStringField(item, fieldIndexes, "industry"),
+			ListDate: getStringField(item, fieldIndexes, "list_date"),
+			IsST:     strings.Contains(strings.ToUpper(name), "ST"),
+			IsActive: getStringField(item, fieldIndexes, "list_status") != "D",
+		})
+	}
+
+	if scopes.Indices {
+		stocks = append(stocks, screeningIndexCatalog...)
+	}
+
+	return stocks, nil
+}
+
+// GetScreeningDailyBars 返回 AI 筛选同步所需的日线数据。
+func (ms *MarketService) GetScreeningDailyBars(symbol string, lookbackDays int) ([]models.KLineData, error) {
+	return ms.GetScreeningDailyBarsWithObserver(symbol, lookbackDays, nil)
+}
+
+func (ms *MarketService) GetScreeningDailyBarsWithObserver(symbol string, lookbackDays int, observer ScreeningDailyBarSourceObserver) ([]models.KLineData, error) {
+	source := ms.screeningDailyBarSource
+	if source == nil {
+		source = newScreeningDailyBarSourceChain(
+			newBaoStockDailyBarSource(),
+			screeningDailyBarSourceFunc(func(symbol string, lookbackDays int, _ ScreeningDailyBarSourceObserver) ([]models.KLineData, error) {
+				return ms.GetKLineData(symbol, "1d", lookbackDays)
+			}),
+		)
+	}
+	return source.Fetch(symbol, lookbackDays, observer)
+}
+
+// GetScreeningSnapshots 返回 AI 筛选同步使用的最新快照。
+func (ms *MarketService) GetScreeningSnapshots(symbols []string) ([]models.Stock, error) {
+	var stockSymbols []string
+	indexSymbols := make(map[string]struct{})
+	for _, symbol := range symbols {
+		if isScreeningIndexSymbol(symbol) {
+			indexSymbols[symbol] = struct{}{}
+			continue
+		}
+		stockSymbols = append(stockSymbols, symbol)
+	}
+
+	var snapshots []models.Stock
+	if len(stockSymbols) > 0 {
+		stocks, err := ms.GetStockRealTimeData(stockSymbols...)
+		if err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, stocks...)
+	}
+
+	if len(indexSymbols) > 0 {
+		indices, err := ms.GetMarketIndices()
+		if err != nil {
+			return nil, err
+		}
+		for _, index := range indices {
+			if _, ok := indexSymbols[index.Code]; !ok {
+				continue
+			}
+			snapshots = append(snapshots, models.Stock{
+				Symbol:        index.Code,
+				Name:          index.Name,
+				Price:         index.Price,
+				Change:        index.Change,
+				ChangePercent: index.ChangePercent,
+				Volume:        index.Volume,
+				Amount:        index.Amount,
+			})
+		}
+	}
+
+	return snapshots, nil
+}
+
 // fetchKLineData 从API获取K线数据
 func (ms *MarketService) fetchKLineData(code string, period string, days int) ([]models.KLineData, error) {
 	scale := ms.periodToScale(period)
@@ -461,6 +577,14 @@ func (ms *MarketService) fetchKLineData(code string, period string, days int) ([
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf(
+			"kline api status %d for %s: %s",
+			resp.StatusCode,
+			code,
+			httpErrorPreview(body),
+		)
+	}
 
 	klines, err := ms.parseKLineData(string(body))
 	if err != nil {
@@ -474,6 +598,55 @@ func (ms *MarketService) fetchKLineData(code string, period string, days int) ([
 	}
 
 	return klines, nil
+}
+
+func httpErrorPreview(body []byte) string {
+	preview := strings.TrimSpace(string(body))
+	preview = strings.ReplaceAll(preview, "\n", " ")
+	preview = strings.ReplaceAll(preview, "\r", " ")
+	preview = strings.Join(strings.Fields(preview), " ")
+	if preview == "" {
+		return "empty response body"
+	}
+	if len(preview) > 160 {
+		return preview[:160] + "..."
+	}
+	return preview
+}
+
+func getStringField(item []interface{}, fieldIndexes map[string]int, field string) string {
+	idx, ok := fieldIndexes[field]
+	if !ok || idx < 0 || idx >= len(item) {
+		return ""
+	}
+	value, _ := item[idx].(string)
+	return value
+}
+
+func screeningStockIdentity(
+	tsCode string,
+	symbol string,
+	scopes models.ScreeningMarketScopeConfig,
+) (fullSymbol string, marketName string, enabled bool) {
+	switch {
+	case strings.HasSuffix(tsCode, ".SH"):
+		return "sh" + symbol, "上海", scopes.Shanghai
+	case strings.HasSuffix(tsCode, ".SZ"):
+		return "sz" + symbol, "深圳", scopes.Shenzhen
+	case strings.HasSuffix(tsCode, ".BJ"):
+		return "bj" + symbol, "北京", scopes.Beijing
+	default:
+		return "", "", false
+	}
+}
+
+func isScreeningIndexSymbol(symbol string) bool {
+	for _, index := range screeningIndexCatalog {
+		if index.Symbol == symbol {
+			return true
+		}
+	}
+	return false
 }
 
 // periodToScale 周期转换为新浪API的scale参数

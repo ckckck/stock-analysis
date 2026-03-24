@@ -67,6 +67,92 @@ func (f *ModelFactory) CreateModel(ctx context.Context, config *models.AIConfig)
 	}
 }
 
+// GenerateText 使用指定 AI 配置生成纯文本响应。
+func (f *ModelFactory) GenerateText(ctx context.Context, config *models.AIConfig, prompt string) (string, error) {
+	llm, err := f.CreateModel(ctx, config)
+	if err != nil {
+		return "", err
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Role:  "user",
+				Parts: []*genai.Part{{Text: prompt}},
+			},
+		},
+	}
+
+	var result strings.Builder
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
+		if err != nil {
+			return "", err
+		}
+		if resp == nil || resp.Content == nil {
+			continue
+		}
+		for _, part := range resp.Content.Parts {
+			if part.Thought || part.Text == "" {
+				continue
+			}
+			result.WriteString(part.Text)
+		}
+	}
+
+	return result.String(), nil
+}
+
+// GenerateTextStream 使用指定 AI 配置流式生成纯文本响应，并通过回调返回增量文本。
+func (f *ModelFactory) GenerateTextStream(
+	ctx context.Context,
+	config *models.AIConfig,
+	prompt string,
+	onDelta func(string),
+) (string, error) {
+	llm, err := f.CreateModel(ctx, config)
+	if err != nil {
+		return "", err
+	}
+
+	req := &model.LLMRequest{
+		Contents: []*genai.Content{
+			{
+				Role:  "user",
+				Parts: []*genai.Part{{Text: prompt}},
+			},
+		},
+	}
+
+	var partialText strings.Builder
+	var finalText strings.Builder
+	for resp, err := range llm.GenerateContent(ctx, req, true) {
+		if err != nil {
+			return "", err
+		}
+		if resp == nil || resp.Content == nil {
+			continue
+		}
+		for _, part := range resp.Content.Parts {
+			if part.Thought || part.Text == "" {
+				continue
+			}
+			if resp.Partial {
+				partialText.WriteString(part.Text)
+				if onDelta != nil {
+					onDelta(part.Text)
+				}
+				continue
+			}
+			finalText.WriteString(part.Text)
+		}
+	}
+
+	if finalText.Len() > 0 {
+		return finalText.String(), nil
+	}
+	return partialText.String(), nil
+}
+
 // createGeminiModel 创建 Gemini 模型
 func (f *ModelFactory) createGeminiModel(ctx context.Context, config *models.AIConfig) (model.LLM, error) {
 	clientConfig := &genai.ClientConfig{

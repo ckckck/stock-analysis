@@ -26,6 +26,14 @@ export function CancelMeeting(arg1) {
   return window['go']['main']['App']['CancelMeeting'](arg1);
 }
 
+export function CancelScreeningQuery() {
+  return window['go']['main']['App']['CancelScreeningQuery']();
+}
+
+export function CancelScreeningSync() {
+  return window['go']['main']['App']['CancelScreeningSync']();
+}
+
 export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
 }
@@ -126,6 +134,18 @@ export function GetOrderBook(arg1) {
   return window['go']['main']['App']['GetOrderBook'](arg1);
 }
 
+export function GetScreeningHistoryRun(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetScreeningHistoryRun'](arg1, arg2, arg3);
+}
+
+export function GetScreeningSyncStatus() {
+  return window['go']['main']['App']['GetScreeningSyncStatus']();
+}
+
+export function GetScreeningUniverseSymbols(arg1) {
+  return window['go']['main']['App']['GetScreeningUniverseSymbols'](arg1);
+}
+
 export function GetSessionMessages(arg1) {
   return window['go']['main']['App']['GetSessionMessages'](arg1);
 }
@@ -158,6 +178,10 @@ export function Greet(arg1) {
   return window['go']['main']['App']['Greet'](arg1);
 }
 
+export function ListScreeningHistory(arg1) {
+  return window['go']['main']['App']['ListScreeningHistory'](arg1);
+}
+
 export function NotifyFrontendReady() {
   return window['go']['main']['App']['NotifyFrontendReady']();
 }
@@ -170,6 +194,10 @@ export function RemoveFromWatchlist(arg1) {
   return window['go']['main']['App']['RemoveFromWatchlist'](arg1);
 }
 
+export function RerunScreeningHistoryRun(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RerunScreeningHistoryRun'](arg1, arg2, arg3);
+}
+
 export function RestartApp() {
   return window['go']['main']['App']['RestartApp']();
 }
@@ -180,6 +208,14 @@ export function RetryAgent(arg1, arg2, arg3) {
 
 export function RetryAgentAndContinue(arg1) {
   return window['go']['main']['App']['RetryAgentAndContinue'](arg1);
+}
+
+export function RunScreeningQuery(arg1) {
+  return window['go']['main']['App']['RunScreeningQuery'](arg1);
+}
+
+export function RunScreeningSync(arg1) {
+  return window['go']['main']['App']['RunScreeningSync'](arg1);
 }
 
 export function SearchStocks(arg1) {

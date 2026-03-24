@@ -120,3 +120,169 @@ export interface MarketStatus {
   isTradeDay: boolean;   // 是否交易日
   holidayName: string;   // 节假日名称
 }
+
+export type ScreeningRetentionMode = 'forever' | 'days';
+
+export interface ScreeningMarketScopeConfig {
+  shanghai: boolean;
+  shenzhen: boolean;
+  beijing: boolean;
+  indices: boolean;
+}
+
+export interface ScreeningConfig {
+  markets: ScreeningMarketScopeConfig;
+  initialSyncDays: number;
+  retentionMode: ScreeningRetentionMode;
+  retentionDays: number;
+  autoSyncEnabled: boolean;
+  autoSyncTime: string;
+  defaultResultLimit: number;
+  sqlTimeoutSeconds: number;
+}
+
+export type AppScreenMode = 'home' | 'watchlist' | 'screening';
+export type ScreeningResultMode = 'unlimited' | 'top_n';
+export type ScreeningResultPreset = '50' | '100' | '200' | 'unlimited';
+export type ScreeningResultTab = 'current' | 'history';
+export type ScreeningRunSource = 'ai' | 'history_sql';
+
+export interface ScreeningRunResult {
+  runId: number;
+  symbol: string;
+  name: string;
+  rank: number;
+  score: number;
+  snapshotTradeDate: string;
+  price: number;
+  changePercent: number;
+  volume: number;
+  amount: number;
+}
+
+export interface ScreeningQueryRequest {
+  prompt: string;
+  aiConfigId?: string;
+  resultMode: ScreeningResultMode;
+  resultLimit: number;
+  page: number;
+  pageSize: number;
+  universeSymbols?: string[];
+}
+
+export interface ScreeningQueryResponse {
+  runId: number;
+  prompt?: string;
+  marketScope: string;
+  resultMode: string;
+  resultLimit: number;
+  generatedSql: string;
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  createdAt?: string;
+  results: ScreeningRunResult[];
+  error?: string;
+}
+
+export interface ScreeningQueryLog {
+  time: string;
+  stage: string;
+  status: string;
+  message: string;
+}
+
+export interface ScreeningQueryProgress {
+  runStatus: string;
+  currentStage: string;
+  progressPercent: number;
+  message: string;
+  streamingText?: string;
+  prompt: string;
+  universeCount?: number;
+  logs: ScreeningQueryLog[];
+  error?: string;
+}
+
+export interface ScreeningHistoryItem {
+  runId: number;
+  prompt: string;
+  marketScope: string;
+  resultMode: string;
+  resultLimit: number;
+  matchedCount: number;
+  createdAt: string;
+}
+
+export interface ScreeningHistoryResponse {
+  items: ScreeningHistoryItem[];
+  error?: string;
+}
+
+export interface ScreeningSyncStatus {
+  marketScope: string;
+  initialSyncDays: number;
+  retentionMode: string;
+  retentionDays: number;
+  lastTradeDate: string;
+  lastSyncedAt: string;
+  targetTradeDate?: string;
+  latestSyncedTradeDate?: string;
+  stocksSynced: number;
+  barsSynced: number;
+  snapshotsSynced: number;
+  storedStocks?: number;
+  storedBars?: number;
+  storedSnapshots?: number;
+  marketStockCount?: number;
+  syncedToLatestStocks?: number;
+  pendingSyncStocks?: number;
+  runStatus?: string;
+  progressPercent?: number;
+  totalStocks?: number;
+  completedStocks?: number;
+  currentSymbol?: string;
+  currentName?: string;
+  currentStage?: string;
+  activeSource?: string;
+  lastMessage?: string;
+  limitStocks?: number;
+  resumeFromCheckpoint?: boolean;
+  syncedSymbols?: string[];
+  events?: ScreeningSyncEvent[];
+  error?: string;
+}
+
+export type ScreeningSyncRunMode = 'manual' | 'auto';
+
+export interface ScreeningSyncRunOptions {
+  mode: ScreeningSyncRunMode;
+  limitStocks: number;
+}
+
+export interface ScreeningSyncEvent {
+  time: string;
+  symbol: string;
+  name: string;
+  source: string;
+  status: string;
+  message: string;
+}
+
+export interface ScreeningSyncProgress {
+  marketScope: string;
+  mode: string;
+  runStatus: string;
+  progressPercent: number;
+  totalStocks: number;
+  completedStocks: number;
+  currentSymbol: string;
+  currentName: string;
+  currentStage: string;
+  activeSource: string;
+  lastMessage: string;
+  limitStocks: number;
+  resumeFromCheckpoint: boolean;
+  events: ScreeningSyncEvent[];
+  error?: string;
+}

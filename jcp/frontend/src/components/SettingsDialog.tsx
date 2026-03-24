@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { X, Cpu, ChevronLeft, Plug, Plus, Trash2, Wrench, Check, Loader2, Brain, RefreshCw, Download, RotateCcw, Globe, Layers, Sliders, Star, MessageSquare, Copy, Sparkles } from 'lucide-react';
-import { getConfig, updateConfig, getAvailableTools, ToolInfo, testAIConnection } from '../services/configService';
+import { X, Cpu, ChevronLeft, Plug, Plus, Trash2, Wrench, Check, Loader2, Brain, RefreshCw, Globe, Layers, Sliders, Star, MessageSquare, Copy, Sparkles } from 'lucide-react';
+import { getConfig, updateConfig, getAvailableTools, ToolInfo, testAIConnection, getScreeningSyncStatus, runScreeningSync, cancelScreeningSync, onScreeningSyncProgress } from '../services/configService';
 import { getAgentConfigs } from '../services/strategyService';
 import { getMCPServers, MCPServerConfig, MCPServerStatus, testMCPConnection, getMCPServerTools, MCPToolInfo } from '../services/mcpService';
-import { checkForUpdate, doUpdate, restartApp, getCurrentVersion, onUpdateProgress, UpdateInfo, UpdateProgress } from '../services/updateService';
 import { getStrategies, getActiveStrategyID, setActiveStrategy, deleteStrategy, generateStrategy, updateStrategy, enhancePrompt, Strategy, StrategyAgent } from '../services/strategyService';
 import { useTheme } from '../contexts/ThemeContext';
 import { useCandleColor, CandleColorMode } from '../contexts/CandleColorContext';
 import { useIndicator, IndicatorConfig, IndicatorType, DEFAULT_INDICATORS } from '../contexts/IndicatorContext';
+import type { ScreeningConfig, ScreeningSyncRunOptions, ScreeningSyncStatus } from '../types';
+import { createPendingScreeningSyncStatus, mergeScreeningSyncProgress, formatScreeningSourceName, formatScreeningSyncRunStatus, resolveScreeningSyncCoverageStats } from '../utils/screeningSync';
 
 interface AIConfig {
   id: string;
@@ -53,11 +54,12 @@ interface OpenClawConfig {
   apiKey: string;
 }
 
-type TabType = 'provider' | 'intent' | 'strategy' | 'mcp' | 'memory' | 'chart' | 'proxy' | 'openclaw' | 'update';
+type TabType = 'provider' | 'intent' | 'strategy' | 'mcp' | 'memory' | 'screening' | 'chart' | 'proxy' | 'openclaw';
 
 interface SettingsDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: TabType;
 }
 
 // Toast 通知 hook
@@ -84,9 +86,15 @@ const useSettingsToast = () => {
   return { toast, showToast, hideToast };
 };
 
-export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose }) => {
+const SCREENING_SYNC_TERMINAL_STATUSES = new Set(['completed', 'failed', 'canceled']);
+
+const isScreeningSyncTerminal = (runStatus?: string): boolean => (
+  Boolean(runStatus && SCREENING_SYNC_TERMINAL_STATUSES.has(runStatus))
+);
+
+export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose, initialTab }) => {
   const { colors } = useTheme();
-  const [activeTab, setActiveTab] = useState<TabType>('provider');
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'provider');
   const [aiConfigs, setAiConfigs] = useState<AIConfig[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServerConfig[]>([]);
   const [mcpStatus, setMcpStatus] = useState<Record<string, MCPServerStatus>>({});
@@ -109,6 +117,23 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     port: 51888,
     apiKey: '',
   });
+  const [screeningConfig, setScreeningConfig] = useState<ScreeningConfig>({
+    markets: {
+      shanghai: true,
+      shenzhen: true,
+      beijing: false,
+      indices: false,
+    },
+    initialSyncDays: 30,
+    retentionMode: 'forever',
+    retentionDays: 60,
+    autoSyncEnabled: false,
+    autoSyncTime: '18:00',
+    defaultResultLimit: 100,
+    sqlTimeoutSeconds: 0,
+  });
+  const [screeningSyncStatus, setScreeningSyncStatus] = useState<ScreeningSyncStatus | null>(null);
+  const [screeningSyncing, setScreeningSyncing] = useState(false);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [activeStrategyId, setActiveStrategyId] = useState<string>('');
   const [moderatorAiId, setModeratorAiId] = useState<string>('');
@@ -119,8 +144,37 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
 
   useEffect(() => {
     if (isOpen) {
+      setActiveTab(initialTab ?? 'provider');
       loadAllConfigs();
     }
+  }, [initialTab, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    const unsubscribe = onScreeningSyncProgress((progress) => {
+      setScreeningSyncStatus(prev => mergeScreeningSyncProgress(prev, progress));
+      setScreeningSyncing(progress.runStatus === 'running');
+
+      if (isScreeningSyncTerminal(progress.runStatus)) {
+        void getScreeningSyncStatus()
+          .then((status) => {
+            setScreeningSyncStatus(prev => ({
+              ...mergeScreeningSyncProgress(prev, progress),
+              ...status,
+              events: (status.events && status.events.length > 0) ? status.events : progress.events,
+            }));
+            setScreeningSyncing(status.runStatus === 'running');
+          })
+          .catch(() => {
+            setScreeningSyncing(false);
+          });
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, [isOpen]);
 
   const loadAllConfigs = async () => {
@@ -142,6 +196,12 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
         apiKey: config.openClaw.apiKey || '',
       });
     }
+    if (config.screening) {
+      setScreeningConfig({
+        ...(config.screening as ScreeningConfig),
+        sqlTimeoutSeconds: (config.screening as ScreeningConfig).sqlTimeoutSeconds ?? 0,
+      });
+    }
     if (config.moderatorAiId) setModeratorAiId(config.moderatorAiId);
     if (config.strategyAiId) setStrategyAiId(config.strategyAiId);
 
@@ -150,6 +210,15 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     setStrategies(loadedStrategies || []);
     const activeId = await getActiveStrategyID();
     setActiveStrategyId(activeId);
+
+    try {
+      const status = await getScreeningSyncStatus();
+      setScreeningSyncStatus(status);
+      setScreeningSyncing(status.runStatus === 'running');
+    } catch {
+      setScreeningSyncStatus(null);
+      setScreeningSyncing(false);
+    }
 
     // 自动检测已启用的 MCP 服务器状态
     const enabledMcps = (mcps || []).filter(m => m.enabled);
@@ -172,6 +241,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     mcpServers: MCPServerConfig[];
     memory: MemoryConfig;
     proxy: ProxyConfig;
+    screening: ScreeningConfig;
+    openClaw: OpenClawConfig;
     moderatorAiId: string;
     strategyAiId: string;
     indicators: any;
@@ -206,6 +277,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     memory: MemoryConfig;
     proxy: ProxyConfig;
     openClaw: OpenClawConfig;
+    screening: ScreeningConfig;
     moderatorAiId: string;
     strategyAiId: string;
     candleColorMode: string;
@@ -244,14 +316,14 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     { id: 'strategy', label: '策略管理', icon: <Layers className="h-4 w-4" /> },
     { id: 'mcp', label: 'MCP服务', icon: <Plug className="h-4 w-4" /> },
     { id: 'memory', label: '记忆管理', icon: <Brain className="h-4 w-4" /> },
+    { id: 'screening', label: 'AI筛选', icon: <Sparkles className="h-4 w-4" /> },
     { id: 'chart', label: '图表设置', icon: <Sliders className="h-4 w-4" /> },
     { id: 'proxy', label: '网络代理', icon: <Globe className="h-4 w-4" /> },
     { id: 'openclaw', label: 'OpenClaw', icon: <Plug className="h-4 w-4" /> },
-    { id: 'update', label: '软件更新', icon: <RefreshCw className="h-4 w-4" /> },
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[140] backdrop-blur-sm">
       <div className="fin-panel border fin-divider rounded-xl w-[720px] max-h-[85vh] overflow-hidden shadow-2xl">
         <Header onClose={onClose} />
         <div className="flex h-[500px]">
@@ -348,6 +420,60 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                 }}
               />
             )}
+            {activeTab === 'screening' && (
+              <ScreeningSettings
+                config={screeningConfig}
+                syncStatus={screeningSyncStatus}
+                syncing={screeningSyncing}
+                onChange={(config) => {
+                  setScreeningConfig(config);
+                  saveConfig({ screening: config });
+                }}
+                onRunSync={async (options) => {
+                  setScreeningSyncing(true);
+                  setScreeningSyncStatus(prev => createPendingScreeningSyncStatus(prev, {
+                    initialSyncDays: screeningConfig.initialSyncDays,
+                    retentionMode: screeningConfig.retentionMode,
+                    retentionDays: screeningConfig.retentionDays,
+                    limitStocks: options.limitStocks,
+                    message: '正在准备同步任务...',
+                  }));
+                  showToast(
+                    'loading',
+                    options.limitStocks > 0 ? `正在同步前 ${options.limitStocks} 只股票...` : '正在同步筛选数据库...',
+                  );
+                  try {
+                    const status = await runScreeningSync(options);
+                    setScreeningSyncStatus(status);
+                    hideToast();
+                    if (status.runStatus === 'canceled') {
+                      showToast('success', '同步已取消，下次会从断点继续');
+                    } else if (status.error || status.runStatus === 'failed') {
+                      showToast('error', status.error || '同步失败');
+                    } else {
+                      showToast('success', '筛选数据库同步完成');
+                    }
+                  } catch (error) {
+                    hideToast();
+                    showToast('error', error instanceof Error ? error.message : '同步失败');
+                  } finally {
+                    setScreeningSyncing(false);
+                  }
+                }}
+                onCancelSync={async () => {
+                  try {
+                    const canceled = await cancelScreeningSync();
+                    if (!canceled) {
+                      showToast('error', '当前没有正在执行的同步任务');
+                      return;
+                    }
+                    showToast('loading', '已发送取消请求，将在当前股票处理完成后停止');
+                  } catch (error) {
+                    showToast('error', error instanceof Error ? error.message : '取消同步失败');
+                  }
+                }}
+              />
+            )}
             {activeTab === 'chart' && (
               <ChartSettings saveConfig={saveConfig} />
             )}
@@ -368,9 +494,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                   saveConfig({ openClaw: config });
                 }}
               />
-            )}
-            {activeTab === 'update' && (
-              <UpdateSettings />
             )}
           </div>
         </div>
@@ -484,6 +607,11 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ configs, onChange, 
     onChange(configs.map(c => ({ ...c, isDefault: c.id === id })));
   };
 
+  const handleEdit = (config: AIConfig) => {
+    setSelectedConfig(config);
+    setView('edit');
+  };
+
   // 复制配置
   const handleCopy = (config: AIConfig) => {
     const newConfig: AIConfig = {
@@ -533,7 +661,8 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ configs, onChange, 
   return (
     <ProviderListView
       configs={configs}
-      onSelect={(config) => { setSelectedConfig(config); setView('edit'); }}
+      onSelect={(config) => handleSetDefault(config.id)}
+      onEdit={handleEdit}
       onSetDefault={handleSetDefault}
       onDelete={handleDelete}
       onCopy={handleCopy}
@@ -552,6 +681,7 @@ const ProviderSettings: React.FC<ProviderSettingsProps> = ({ configs, onChange, 
 interface ProviderListViewProps {
   configs: AIConfig[];
   onSelect: (config: AIConfig) => void;
+  onEdit: (config: AIConfig) => void;
   onSetDefault: (id: string) => void;
   onDelete: (id: string) => void;
   onCopy: (config: AIConfig) => void;
@@ -565,7 +695,7 @@ interface ProviderListViewProps {
 }
 
 const ProviderListView: React.FC<ProviderListViewProps> = ({
-  configs, onSelect, onSetDefault, onDelete, onCopy, onAdd,
+  configs, onSelect, onEdit, onSetDefault, onDelete, onCopy, onAdd,
   showAddModal, newProviderType, onSelectType, onConfirmAdd, onCancelAdd, getDeleteDisabledReason
 }) => {
   const { colors } = useTheme();
@@ -602,6 +732,7 @@ const ProviderListView: React.FC<ProviderListViewProps> = ({
                 key={config.id}
                 config={config}
                 onSelect={() => onSelect(config)}
+                onEdit={() => onEdit(config)}
                 onSetDefault={() => onSetDefault(config.id)}
                 onDelete={() => onDelete(config.id)}
                 onCopy={() => onCopy(config)}
@@ -637,7 +768,7 @@ interface AddAIConfigModalProps {
 const AddAIConfigModal: React.FC<AddAIConfigModalProps> = ({ selectedType, onSelectType, onConfirm, onCancel }) => {
   const { colors } = useTheme();
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] backdrop-blur-sm">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[150] backdrop-blur-sm">
       <div className="fin-panel border fin-divider rounded-xl w-[360px] p-5 shadow-2xl">
         <h3 className={`text-lg font-semibold mb-4 ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>添加 AI 配置</h3>
         <div className="space-y-3 mb-5">
@@ -678,6 +809,7 @@ const AddAIConfigModal: React.FC<AddAIConfigModalProps> = ({ selectedType, onSel
 interface ProviderListItemProps {
   config: AIConfig;
   onSelect: () => void;
+  onEdit: () => void;
   onSetDefault: () => void;
   onDelete: () => void;
   onCopy: () => void;
@@ -686,7 +818,7 @@ interface ProviderListItemProps {
 }
 
 const ProviderListItem: React.FC<ProviderListItemProps> = ({
-  config, onSelect, onSetDefault, onDelete, onCopy, deleteDisabled, deleteDisabledReason
+  config, onSelect, onEdit, onSetDefault, onDelete, onCopy, deleteDisabled, deleteDisabledReason
 }) => {
   const { colors } = useTheme();
   return (
@@ -717,6 +849,13 @@ const ProviderListItem: React.FC<ProviderListItemProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+          <button
+            onClick={onEdit}
+            className={`p-1.5 rounded transition-colors ${colors.isDark ? 'text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/20' : 'text-slate-500 hover:text-emerald-500 hover:bg-emerald-500/10'}`}
+            title="编辑配置"
+          >
+            <Wrench className="h-4 w-4" />
+          </button>
           {/* 复制按钮 - 始终显示 */}
           <button
             onClick={onCopy}
@@ -1182,6 +1321,316 @@ const MemorySettings: React.FC<MemorySettingsProps> = ({ config, aiConfigs, onCh
         </div>
       )}
     </div>
+  );
+};
+
+// ========== AI筛选设置选项卡 ==========
+interface ScreeningSettingsProps {
+  config: ScreeningConfig;
+  syncStatus: ScreeningSyncStatus | null;
+  syncing: boolean;
+  onChange: (config: ScreeningConfig) => void;
+  onRunSync: (options: ScreeningSyncRunOptions) => Promise<void>;
+  onCancelSync: () => Promise<void>;
+}
+
+const ScreeningSettings: React.FC<ScreeningSettingsProps> = ({
+  config,
+  syncStatus,
+  syncing,
+  onChange,
+  onRunSync,
+  onCancelSync,
+}) => {
+  const { colors } = useTheme();
+
+  const progressPercent = Math.max(0, Math.min(100, Math.round(syncStatus?.progressPercent || 0)));
+  const currentStockLabel = syncStatus?.currentSymbol
+    ? `${syncStatus.currentSymbol}${syncStatus.currentName ? ` · ${syncStatus.currentName}` : ''}`
+    : '--';
+  const coverageStats = resolveScreeningSyncCoverageStats(syncStatus);
+  const recentEvents = (syncStatus?.events || []).slice(-6).reverse();
+
+  const updateMarkets = (field: keyof ScreeningConfig['markets'], value: boolean) => {
+    onChange({
+      ...config,
+      markets: {
+        ...config.markets,
+        [field]: value,
+      },
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className={`font-medium ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>AI 筛选同步设置</h3>
+        <p className={`text-sm mt-1 ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+          配置本地 SQLite 筛选库的市场范围、同步窗口、保留策略和应用运行期自动同步。
+        </p>
+      </div>
+
+      <section className={`rounded-xl border p-4 ${colors.isDark ? 'border-slate-700 bg-slate-900/30' : 'border-slate-200 bg-slate-50/80'}`}>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className={`text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>手动同步</div>
+            <div className={`text-xs mt-1 ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+              首次按设置窗口拉取，之后按交易日增量补齐。
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                void onRunSync({
+                  mode: 'manual',
+                  limitStocks: 0,
+                });
+              }}
+              disabled={syncing}
+              className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] px-4 py-2 text-sm text-white disabled:opacity-50"
+            >
+              {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {syncing ? '同步中...' : '立即同步'}
+            </button>
+            {syncing && (
+              <button
+                onClick={() => { void onCancelSync(); }}
+                className={`rounded-lg border px-3 py-2 text-sm ${colors.isDark ? 'border-red-400/30 bg-red-500/10 text-red-300 hover:bg-red-500/20' : 'border-red-300 bg-red-50 text-red-600 hover:bg-red-100'}`}
+              >
+                取消
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <InfoCard label="同步状态" value={formatScreeningSyncRunStatus(syncStatus?.runStatus)} />
+          <InfoCard label="最近交易日" value={syncStatus?.lastTradeDate || '未同步'} />
+          <InfoCard label="最近同步时间" value={syncStatus?.lastSyncedAt || '未同步'} />
+          <InfoCard label="已同步到最新" value={coverageStats.syncedProgressLabel} />
+          <InfoCard label="待同步股票" value={coverageStats.pendingSyncLabel} />
+          <InfoCard label="股票总数" value={coverageStats.marketStockCountLabel} />
+          <InfoCard label="累计日线数" value={syncStatus ? String(syncStatus.barsSynced) : '--'} />
+          <InfoCard label="当前数据源" value={formatScreeningSourceName(syncStatus?.activeSource)} />
+        </div>
+
+        {(syncing || syncStatus?.runStatus || syncStatus?.totalStocks || syncStatus?.events?.length) && (
+          <div className={`mt-4 rounded-lg border px-3 py-3 ${colors.isDark ? 'border-slate-800 bg-slate-950/50' : 'border-slate-200 bg-white/90'}`}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className={`text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>
+                  {progressPercent}% {syncStatus?.resumeFromCheckpoint ? '· 断点续传' : ''}
+                  {(syncStatus?.limitStocks || 0) > 0 ? ` · 测试 ${syncStatus?.limitStocks} 只` : ''}
+                </div>
+                <div className={`mt-1 text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                  {syncStatus?.lastMessage || '等待同步开始'}
+                </div>
+              </div>
+              <div className={`text-xs ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                当前股票：{currentStockLabel}
+              </div>
+            </div>
+
+            <div className={`mt-3 h-2 overflow-hidden rounded-full ${colors.isDark ? 'bg-slate-800' : 'bg-slate-200'}`}>
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)] transition-all duration-300"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+
+            {recentEvents.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <div className={`text-xs font-medium ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>数据源记录</div>
+                {recentEvents.map((event, index) => (
+                  <div
+                    key={`${event.time || 'event'}-${index}`}
+                    className={`rounded-lg border px-3 py-2 text-xs ${colors.isDark ? 'border-slate-800 bg-slate-950/40 text-slate-300' : 'border-slate-200 bg-slate-50/80 text-slate-600'}`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium">{formatScreeningSourceName(event.source)} · {event.status}</span>
+                      <span className={colors.isDark ? 'text-slate-500' : 'text-slate-400'}>{event.time || '--'}</span>
+                    </div>
+                    <div className="mt-1">{event.message}</div>
+                    {(event.symbol || event.name) && (
+                      <div className={`mt-1 ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                        {event.symbol}{event.name ? ` · ${event.name}` : ''}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {syncStatus?.error && (
+          <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+            {syncStatus.error}
+          </div>
+        )}
+      </section>
+
+      <section className={`rounded-xl border p-4 ${colors.isDark ? 'border-slate-700 bg-slate-900/30' : 'border-slate-200 bg-slate-50/80'}`}>
+        <div className={`mb-3 text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>市场范围</div>
+        <div className="grid grid-cols-2 gap-3">
+          <CheckboxCard
+            checked={config.markets.shanghai}
+            label="沪市"
+            description="默认启用，纳入上证 A 股。"
+            onChange={(checked) => updateMarkets('shanghai', checked)}
+          />
+          <CheckboxCard
+            checked={config.markets.shenzhen}
+            label="深市"
+            description="默认启用，纳入深证 A 股。"
+            onChange={(checked) => updateMarkets('shenzhen', checked)}
+          />
+          <CheckboxCard
+            checked={config.markets.beijing}
+            label="北交所"
+            description="可选启用，补充北交所股票。"
+            onChange={(checked) => updateMarkets('beijing', checked)}
+          />
+          <CheckboxCard
+            checked={config.markets.indices}
+            label="指数"
+            description="可选启用，上证指数/深证成指/创业板指。"
+            onChange={(checked) => updateMarkets('indices', checked)}
+          />
+        </div>
+      </section>
+
+      <section className={`rounded-xl border p-4 ${colors.isDark ? 'border-slate-700 bg-slate-900/30' : 'border-slate-200 bg-slate-50/80'}`}>
+        <div className={`mb-4 text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>同步与保留</div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={`mb-1 block text-sm ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>首次同步范围</label>
+            <select
+              value={String(config.initialSyncDays)}
+              onChange={(e) => onChange({ ...config, initialSyncDays: Number(e.target.value) })}
+              className={`w-full fin-input rounded-lg px-3 py-2 text-sm ${colors.isDark ? 'text-white' : 'text-slate-800'}`}
+            >
+              <option value="30">最近 30 天</option>
+              <option value="60">最近 60 天</option>
+              <option value="90">最近 90 天</option>
+              <option value="120">最近 120 天</option>
+            </select>
+          </div>
+          <div>
+            <label className={`mb-1 block text-sm ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>AI 默认结果条数</label>
+            <select
+              value={String(config.defaultResultLimit)}
+              onChange={(e) => onChange({ ...config, defaultResultLimit: Number(e.target.value) })}
+              className={`w-full fin-input rounded-lg px-3 py-2 text-sm ${colors.isDark ? 'text-white' : 'text-slate-800'}`}
+            >
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+            </select>
+          </div>
+          <div>
+            <label className={`mb-1 block text-sm ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>SQL 超时</label>
+            <select
+              value={String(config.sqlTimeoutSeconds ?? 0)}
+              onChange={(e) => onChange({ ...config, sqlTimeoutSeconds: Number(e.target.value) })}
+              className={`w-full fin-input rounded-lg px-3 py-2 text-sm ${colors.isDark ? 'text-white' : 'text-slate-800'}`}
+            >
+              <option value="0">不限</option>
+              <option value="45">45 秒</option>
+              <option value="60">60 秒</option>
+              <option value="90">90 秒</option>
+              <option value="120">120 秒</option>
+              <option value="180">180 秒</option>
+            </select>
+          </div>
+          <div>
+            <label className={`mb-1 block text-sm ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>保留策略</label>
+            <select
+              value={config.retentionMode === 'forever' ? 'forever' : String(config.retentionDays)}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (value === 'forever') {
+                  onChange({ ...config, retentionMode: 'forever', retentionDays: 60 });
+                } else {
+                  onChange({ ...config, retentionMode: 'days', retentionDays: Number(value) });
+                }
+              }}
+              className={`w-full fin-input rounded-lg px-3 py-2 text-sm ${colors.isDark ? 'text-white' : 'text-slate-800'}`}
+            >
+              <option value="forever">永久保留</option>
+              <option value="30">仅保留近 30 天</option>
+              <option value="60">仅保留近 60 天</option>
+            </select>
+          </div>
+          <div>
+            <label className={`mb-1 block text-sm ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>自动同步时间</label>
+            <input
+              type="time"
+              value={config.autoSyncTime}
+              onChange={(e) => onChange({ ...config, autoSyncTime: e.target.value })}
+              className={`w-full fin-input rounded-lg px-3 py-2 text-sm ${colors.isDark ? 'text-white' : 'text-slate-800'}`}
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className={`rounded-xl border p-4 ${colors.isDark ? 'border-slate-700 bg-slate-900/30' : 'border-slate-200 bg-slate-50/80'}`}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className={`text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>应用运行时自动同步</div>
+            <div className={`text-xs mt-1 ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+              仅在应用运行期间生效，到达设定时间后自动执行增量同步。
+            </div>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={config.autoSyncEnabled}
+              onChange={(e) => onChange({ ...config, autoSyncEnabled: e.target.checked })}
+              className="sr-only peer"
+            />
+            <div className={`w-11 h-6 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent ${colors.isDark ? 'bg-slate-700' : 'bg-slate-400'}`}></div>
+          </label>
+        </div>
+      </section>
+    </div>
+  );
+};
+
+const InfoCard: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => {
+  const { colors } = useTheme();
+  return (
+    <div className={`rounded-lg border p-3 ${colors.isDark ? 'border-slate-800 bg-slate-950/40' : 'border-slate-200 bg-white/80'}`}>
+      <div className={`text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>{label}</div>
+      <div className={`mt-1 text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>{value}</div>
+    </div>
+  );
+};
+
+const CheckboxCard: React.FC<{
+  checked: boolean;
+  label: string;
+  description: string;
+  onChange: (checked: boolean) => void;
+}> = ({ checked, label, description, onChange }) => {
+  const { colors } = useTheme();
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={`rounded-lg border px-3 py-3 text-left transition-colors ${
+        checked
+          ? 'border-accent/40 bg-accent/10'
+          : `${colors.isDark ? 'border-slate-700 bg-slate-950/30 hover:border-slate-600' : 'border-slate-200 bg-white/80 hover:border-slate-300'}`
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <span className={`text-sm font-medium ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>{label}</span>
+        <span className={`text-xs ${checked ? 'text-accent-2' : (colors.isDark ? 'text-slate-500' : 'text-slate-400')}`}>
+          {checked ? '已启用' : '未启用'}
+        </span>
+      </div>
+      <div className={`mt-2 text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>{description}</div>
+    </button>
   );
 };
 
@@ -1924,127 +2373,6 @@ const OpenClawSettings: React.FC<OpenClawSettingsProps> = ({ config, onChange })
               className={`w-full fin-input rounded-lg px-3 py-2 text-sm ${colors.isDark ? 'text-white' : 'text-slate-800'}`}
             />
           </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-// ========== 更新设置选项卡 ==========
-const UpdateSettings: React.FC = () => {
-  const { colors } = useTheme();
-  const [currentVersion, setCurrentVersion] = useState<string>('');
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [updating, setUpdating] = useState(false);
-  const [progress, setProgress] = useState<UpdateProgress | null>(null);
-
-  useEffect(() => {
-    getCurrentVersion().then(setCurrentVersion);
-    const cleanup = onUpdateProgress(setProgress);
-    return cleanup;
-  }, []);
-
-  const handleCheckUpdate = async () => {
-    setChecking(true);
-    setUpdateInfo(null);
-    try {
-      const info = await checkForUpdate();
-      setUpdateInfo(info);
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const handleUpdate = async () => {
-    setUpdating(true);
-    setProgress(null);
-    try {
-      const result = await doUpdate();
-      if (result !== 'success') {
-        setProgress({ status: 'error', message: result, percent: 0 });
-      }
-    } catch (e) {
-      setProgress({ status: 'error', message: String(e), percent: 0 });
-    }
-  };
-
-  const handleRestart = async () => {
-    await restartApp();
-  };
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h3 className={`font-medium ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>软件更新</h3>
-        <p className={`text-sm mt-1 ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>检查并安装最新版本</p>
-      </div>
-
-      <div className="fin-panel rounded-lg p-4 border fin-divider">
-        <div className="flex items-center justify-between">
-          <div>
-            <span className={`text-sm ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>当前版本</span>
-            <p className={`font-medium mt-1 ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>v{currentVersion || '...'}</p>
-          </div>
-          <button
-            onClick={handleCheckUpdate}
-            disabled={checking || updating}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm disabled:opacity-50 transition-colors ${colors.isDark ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-slate-200 hover:bg-slate-300 text-slate-700'}`}
-          >
-            {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {checking ? '检查中...' : '检查更新'}
-          </button>
-        </div>
-      </div>
-
-      {updateInfo && (
-        <div className={`fin-panel rounded-lg p-4 border ${updateInfo.hasUpdate ? 'border-accent/50 bg-accent/5' : 'fin-divider'}`}>
-          {updateInfo.error ? (
-            <div className="text-red-400 text-sm">{updateInfo.error}</div>
-          ) : updateInfo.hasUpdate ? (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-accent-2 text-sm font-medium">发现新版本</span>
-                  <p className={`font-medium mt-1 ${colors.isDark ? 'text-white' : 'text-slate-800'}`}>v{updateInfo.latestVersion}</p>
-                </div>
-                <button onClick={handleUpdate} disabled={updating}
-                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] text-white rounded-lg text-sm disabled:opacity-50">
-                  {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                  {updating ? '更新中...' : '立即更新'}
-                </button>
-              </div>
-              {updateInfo.releaseNotes && (
-                <div className="pt-3 border-t fin-divider">
-                  <span className={`text-xs ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>更新说明</span>
-                  <p className={`text-sm mt-1 whitespace-pre-wrap ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>{updateInfo.releaseNotes}</p>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-accent-2">
-              <Check className="h-4 w-4" /><span className="text-sm">已是最新版本</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {progress && (
-        <div className="fin-panel rounded-lg p-4 border fin-divider">
-          <div className="flex items-center justify-between mb-2">
-            <span className={`text-sm ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>{progress.message}</span>
-            {progress.status === 'completed' && (
-              <button onClick={handleRestart} className="flex items-center gap-2 px-3 py-1.5 bg-accent text-white rounded-lg text-xs">
-                <RotateCcw className="h-3 w-3" />重启应用
-              </button>
-            )}
-          </div>
-          {progress.percent > 0 && (
-            <div className={`w-full rounded-full h-2 ${colors.isDark ? 'bg-slate-700' : 'bg-slate-300'}`}>
-              <div className={`h-2 rounded-full transition-all ${progress.status === 'error' ? 'bg-red-500' : progress.status === 'completed' ? 'bg-accent' : 'bg-accent-2'}`}
-                style={{ width: `${progress.percent}%` }} />
-            </div>
-          )}
         </div>
       )}
     </div>
