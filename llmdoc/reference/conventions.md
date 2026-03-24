@@ -42,6 +42,7 @@
 ## 3. 约定补充
 
 - 顶层仓库仍统一管理 `jcp/` 源码；AI 筛选的数据不进仓库，运行时固定落到用户配置目录下的 `jcp/screening/screening.db`，见 `jcp/internal/pkg/paths/paths.go:14`、`jcp/internal/pkg/paths/paths.go:39`。
+- Wails 应用展示名是“散牛盘”，Windows 构建产物文件名也改为 `散牛盘.exe`；但内部工程目录、Go module 和用户数据目录仍保留 `jcp` 命名，见 `jcp/wails.json:3`、`jcp/wails.json:4`、`jcp/internal/pkg/paths/paths.go:14`。
 - AI 筛选同步只保存日线相关数据，不保存分钟级别数据；默认市场范围是沪市和深市，可选补充北交所与指数。深市 `300`、`301` 开头的创业板个股会在股票池构建时被排除，不参与同步和筛选，但指数范围不受影响，见 `jcp/internal/models/config.go:132`、`jcp/internal/services/screening_sync_service.go:67`、`jcp/internal/services/market_service.go:632`。
 - AI 筛选 SQL 必须是 `SELECT` 或 `WITH ... SELECT`，只能引用白名单表/视图，并遵守 `ORDER BY` 与 `LIMIT` 规则；不允许写操作或额外 SQLite 指令，见 `jcp/internal/services/screening_query_service.go:15`、`jcp/internal/services/screening_query_service.go:22`、`jcp/internal/services/screening_query_service.go:131`。
 - 历史筛选记录保存的是执行时的 SQL、作用域和结果快照；回放历史读取快照，不重新请求模型，也不重新跑 SQL。若用户从历史记录再次执行，是否复用 SQL 由“提示词、市场范围、结果模式、结果条数、测试范围”共同决定；只要任一项变化，就重新请求模型生成 SQL，见 `jcp/internal/services/screening_store.go:121`、`jcp/internal/services/screening_query_service.go:217`、`jcp/frontend/src/utils/screeningHistoryReuse.ts:1`。
