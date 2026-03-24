@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useMemo, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { ZoomIn, ZoomOut, MoveHorizontal, Eye, EyeOff } from 'lucide-react';
 import {
   createChart,
@@ -30,6 +30,15 @@ import {
   calculateRSI,
   calculateKDJ,
 } from '../utils/indicators';
+import {
+  buildKlineZoomLogicalRange,
+  getKlinePointerInteractionOptions,
+  getNextEffectiveKlineZoomPercent,
+  getNextKlineZoomPercent,
+  panKlineLogicalRange,
+  type LogicalRangeLike,
+} from '../utils/klineKeyboard';
+import { debugAppEvent } from '../utils/appLog';
 
 const VOLUME_MIN = 20;
 const VOLUME_MAX = 200;
@@ -38,9 +47,16 @@ const VOLUME_DEFAULT = 72;
 interface StockChartProps {
   data: KLineData[];
   updateMode: 'full' | 'incremental' | 'refresh';
+  klineZoomPercent: number;
   period: TimePeriod;
   onPeriodChange: (p: TimePeriod) => void;
   stock?: Stock;
+}
+
+export interface StockChartHandle {
+  panLeft: () => void;
+  panRight: () => void;
+  getNextEffectiveZoomPercent: (action: 'zoom_in' | 'zoom_out', currentZoomPercent: number) => number;
 }
 
 // 副图类型
@@ -79,10 +95,18 @@ function formatTimeDisplay(timeStr: string): string {
   return timeStr.slice(0, 10) + ' 00:00:00';
 }
 
-export const StockChartLW: React.FC<StockChartProps> = ({ data, updateMode, period, onPeriodChange, stock }) => {
+export const StockChartLW = forwardRef<StockChartHandle, StockChartProps>(({
+  data,
+  updateMode,
+  klineZoomPercent,
+  period,
+  onPeriodChange,
+  stock,
+}, ref) => {
   const { colors } = useTheme();
   const cc = useCandleColor();
   const { config: indicatorConfig, updateIndicator } = useIndicator();
+  const chartRootRef = useRef<HTMLDivElement>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const volumeContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -95,11 +119,21 @@ export const StockChartLW: React.FC<StockChartProps> = ({ data, updateMode, peri
   const subSeriesRefs = useRef<ISeriesApi<SeriesType, Time>[]>([]);
   const seriesTypeRef = useRef<'line' | 'candle' | null>(null);
   const hasFittedRef = useRef(false);
+  const fittedLogicalRangeRef = useRef<LogicalRangeLike | null>(null);
+  const logicalBoundsRef = useRef<LogicalRangeLike | null>(null);
 
   const [volumeHeight, setVolumeHeight] = useState(VOLUME_DEFAULT);
 
   const handleVolumeResize = useCallback((delta: number) => {
     setVolumeHeight(prev => Math.max(VOLUME_MIN, Math.min(VOLUME_MAX, prev - delta)));
+  }, []);
+
+  const handleChartRootMouseDown = useCallback(() => {
+    chartRootRef.current?.focus({ preventScroll: true });
+    debugAppEvent('kline-shortcut', 'chart root focused', {
+      activeTagName: document.activeElement instanceof HTMLElement ? document.activeElement.tagName : null,
+    });
+    setIndicatorPopup(null);
   }, []);
 
   // series → 指标类型映射（用于点击识别）
@@ -161,6 +195,77 @@ export const StockChartLW: React.FC<StockChartProps> = ({ data, updateMode, peri
     return `${sign}${change.toFixed(2)}`;
   }, [preClose]);
 
+  const applyLogicalRange = useCallback((range: LogicalRangeLike | null) => {
+    if (!range) return;
+    chartRef.current?.timeScale().setVisibleLogicalRange(range);
+    volumeChartRef.current?.timeScale().setVisibleLogicalRange(range);
+  }, []);
+
+  const rememberFittedLogicalRange = useCallback(() => {
+    const range = chartRef.current?.timeScale().getVisibleLogicalRange();
+    if (!range) {
+      debugAppEvent('kline-shortcut', 'remember fit skipped: no visible range');
+      return null;
+    }
+
+    const nextRange = { from: range.from, to: range.to };
+    fittedLogicalRangeRef.current = nextRange;
+    logicalBoundsRef.current = safeData.length > 0 ? { from: 0, to: safeData.length - 1 } : null;
+    debugAppEvent('kline-shortcut', 'remembered fitted range', {
+      range: nextRange,
+      bounds: logicalBoundsRef.current,
+      width: nextRange.to - nextRange.from,
+      points: safeData.length,
+      period,
+    });
+    return nextRange;
+  }, [period, safeData.length]);
+
+  const applyCurrentKlineZoom = useCallback(() => {
+    const baseRange = fittedLogicalRangeRef.current;
+    const logicalBounds = logicalBoundsRef.current ?? baseRange;
+    const currentRange = chartRef.current?.timeScale().getVisibleLogicalRange();
+    if (!baseRange || !logicalBounds || !currentRange) {
+      debugAppEvent('kline-shortcut', 'apply zoom skipped', {
+        hasBaseRange: Boolean(baseRange),
+        hasLogicalBounds: Boolean(logicalBounds),
+        hasCurrentRange: Boolean(currentRange),
+        zoomPercent: klineZoomPercent,
+        period,
+        points: safeData.length,
+      });
+      return;
+    }
+
+    const nextRange = buildKlineZoomLogicalRange({
+      baseRange,
+      bounds: logicalBounds,
+      currentRange: { from: currentRange.from, to: currentRange.to },
+      zoomPercent: klineZoomPercent,
+    });
+    const baseWidth = baseRange.to - baseRange.from;
+    const boundsWidth = logicalBounds.to - logicalBounds.from;
+    const currentWidth = currentRange.to - currentRange.from;
+    const nextWidth = nextRange.to - nextRange.from;
+    debugAppEvent('kline-shortcut', 'apply zoom', {
+      zoomPercent: klineZoomPercent,
+      baseRange,
+      logicalBounds,
+      currentRange: { from: currentRange.from, to: currentRange.to },
+      nextRange,
+      baseWidth,
+      boundsWidth,
+      currentWidth,
+      nextWidth,
+      hitBaseWidth: nextWidth >= baseWidth,
+      hitBoundsWidth: nextWidth >= boundsWidth,
+      hitMinVisibleBars: nextWidth <= 10,
+      period,
+      points: safeData.length,
+    });
+    applyLogicalRange(nextRange);
+  }, [applyLogicalRange, klineZoomPercent, period, safeData.length]);
+
   // 清除所有 series（不销毁图表实例）
   const clearAllSeries = useCallback(() => {
     const chart = chartRef.current;
@@ -181,6 +286,8 @@ export const StockChartLW: React.FC<StockChartProps> = ({ data, updateMode, peri
     }
     seriesTypeRef.current = null;
     hasFittedRef.current = false;
+    fittedLogicalRangeRef.current = null;
+    logicalBoundsRef.current = null;
   }, []);
 
   // ========== 唯一的图表创建：组件挂载时创建，卸载时销毁 ==========
@@ -256,6 +363,7 @@ export const StockChartLW: React.FC<StockChartProps> = ({ data, updateMode, peri
       bollSeriesRefs.current = [];
       subSeriesRefs.current = [];
       seriesTypeRef.current = null;
+      logicalBoundsRef.current = null;
     };
   }, []); // 空依赖 —— 只执行一次
 
@@ -304,22 +412,25 @@ export const StockChartLW: React.FC<StockChartProps> = ({ data, updateMode, peri
     const chart = chartRef.current;
     const volumeChart = volumeChartRef.current;
     if (!chart || !volumeChart) return;
+    const pointerInteraction = getKlinePointerInteractionOptions(period);
 
     chart.applyOptions({
       timeScale: { timeVisible: isIntraday, secondsVisible: false },
-      handleScroll: !isIntraday,
-      handleScale: !isIntraday,
+      handleScroll: pointerInteraction.handleScroll,
+      handleScale: pointerInteraction.handleScale,
     });
     volumeChart.applyOptions({
       timeScale: { timeVisible: isIntraday, secondsVisible: false },
-      handleScroll: !isIntraday,
-      handleScale: !isIntraday,
+      handleScroll: pointerInteraction.handleScroll,
+      handleScale: pointerInteraction.handleScale,
     });
-  }, [isIntraday]);
+  }, [isIntraday, period]);
 
   // 切换周期时重置 fit 状态，避免沿用旧 X 轴可视范围
   useEffect(() => {
     hasFittedRef.current = false;
+    fittedLogicalRangeRef.current = null;
+    logicalBoundsRef.current = null;
   }, [period]);
 
   // 分时模式固定显示成交量副图，避免隐藏 tab 后无法恢复
@@ -329,6 +440,90 @@ export const StockChartLW: React.FC<StockChartProps> = ({ data, updateMode, peri
     setSubChartType('volume');
     subChartTypeRef.current = 'volume';
   }, [isIntraday]);
+
+  useImperativeHandle(ref, () => ({
+    panLeft: () => {
+      const baseRange = fittedLogicalRangeRef.current;
+      const logicalBounds = logicalBoundsRef.current ?? baseRange;
+      const currentRange = chartRef.current?.timeScale().getVisibleLogicalRange();
+      if (!baseRange || !logicalBounds || !currentRange) {
+        debugAppEvent('kline-shortcut', 'pan left skipped', {
+          hasBaseRange: Boolean(baseRange),
+          hasLogicalBounds: Boolean(logicalBounds),
+          hasCurrentRange: Boolean(currentRange),
+        });
+        return;
+      }
+
+      const nextRange = panKlineLogicalRange({
+        currentRange: { from: currentRange.from, to: currentRange.to },
+        bounds: logicalBounds,
+        direction: 'pan_left',
+      });
+      debugAppEvent('kline-shortcut', 'pan left', {
+        baseRange,
+        logicalBounds,
+        currentRange: { from: currentRange.from, to: currentRange.to },
+        nextRange,
+      });
+      applyLogicalRange(nextRange);
+    },
+    panRight: () => {
+      const baseRange = fittedLogicalRangeRef.current;
+      const logicalBounds = logicalBoundsRef.current ?? baseRange;
+      const currentRange = chartRef.current?.timeScale().getVisibleLogicalRange();
+      if (!baseRange || !logicalBounds || !currentRange) {
+        debugAppEvent('kline-shortcut', 'pan right skipped', {
+          hasBaseRange: Boolean(baseRange),
+          hasLogicalBounds: Boolean(logicalBounds),
+          hasCurrentRange: Boolean(currentRange),
+        });
+        return;
+      }
+
+      const nextRange = panKlineLogicalRange({
+        currentRange: { from: currentRange.from, to: currentRange.to },
+        bounds: logicalBounds,
+        direction: 'pan_right',
+      });
+      debugAppEvent('kline-shortcut', 'pan right', {
+        baseRange,
+        logicalBounds,
+        currentRange: { from: currentRange.from, to: currentRange.to },
+        nextRange,
+      });
+      applyLogicalRange(nextRange);
+    },
+    getNextEffectiveZoomPercent: (action, currentZoomPercent) => {
+      const baseRange = fittedLogicalRangeRef.current;
+      const logicalBounds = logicalBoundsRef.current ?? baseRange;
+      const currentRange = chartRef.current?.timeScale().getVisibleLogicalRange();
+      if (!baseRange || !logicalBounds || !currentRange) {
+        return getNextKlineZoomPercent(currentZoomPercent, action);
+      }
+
+      const immediateNext = getNextKlineZoomPercent(currentZoomPercent, action);
+      const effectiveNext = getNextEffectiveKlineZoomPercent({
+        currentZoomPercent,
+        action,
+        baseRange,
+        bounds: logicalBounds,
+        currentRange: { from: currentRange.from, to: currentRange.to },
+      });
+      if (effectiveNext !== immediateNext) {
+        debugAppEvent('kline-shortcut', 'skip ineffective zoom levels', {
+          action,
+          currentZoomPercent,
+          immediateNext,
+          effectiveNext,
+          currentRange: { from: currentRange.from, to: currentRange.to },
+          baseRange,
+          logicalBounds,
+        });
+      }
+      return effectiveNext;
+    },
+  }), [applyLogicalRange]);
 
   // ========== 副图辅助函数 ==========
   const clearSubChart = useCallback(() => {
@@ -537,9 +732,23 @@ export const StockChartLW: React.FC<StockChartProps> = ({ data, updateMode, peri
     if (shouldFit) {
       chart.timeScale().fitContent();
       volumeChart.timeScale().fitContent();
+      rememberFittedLogicalRange();
+      applyCurrentKlineZoom();
       hasFittedRef.current = true;
     }
-  }, [safeData, updateMode, preClose, isIntraday, chartColors, clearAllSeries, clearSubChart, renderSubChart, indicatorConfig]);
+  }, [
+    applyCurrentKlineZoom,
+    chartColors,
+    clearAllSeries,
+    clearSubChart,
+    indicatorConfig,
+    isIntraday,
+    preClose,
+    rememberFittedLogicalRange,
+    renderSubChart,
+    safeData,
+    updateMode,
+  ]);
 
   // ========== 副图指标禁用时自动回退到成交量 ==========
   useEffect(() => {
@@ -554,8 +763,9 @@ export const StockChartLW: React.FC<StockChartProps> = ({ data, updateMode, peri
       clearSubChart();
       renderSubChart('volume', safeData);
       volumeChartRef.current?.timeScale().fitContent();
+      applyCurrentKlineZoom();
     }
-  }, [indicatorConfig.macd.enabled, indicatorConfig.rsi.enabled, indicatorConfig.kdj.enabled, clearSubChart, renderSubChart, safeData]);
+  }, [applyCurrentKlineZoom, indicatorConfig.macd.enabled, indicatorConfig.rsi.enabled, indicatorConfig.kdj.enabled, clearSubChart, renderSubChart, safeData]);
 
   // ========== 副图切换 ==========
   const handleSubChartSwitch = useCallback((type: SubChartType) => {
@@ -564,7 +774,15 @@ export const StockChartLW: React.FC<StockChartProps> = ({ data, updateMode, peri
     clearSubChart();
     renderSubChart(type, safeData);
     volumeChartRef.current?.timeScale().fitContent();
-  }, [clearSubChart, renderSubChart, safeData]);
+    applyCurrentKlineZoom();
+  }, [applyCurrentKlineZoom, clearSubChart, renderSubChart, safeData]);
+
+  useEffect(() => {
+    if (safeData.length === 0) {
+      return;
+    }
+    applyCurrentKlineZoom();
+  }, [applyCurrentKlineZoom, safeData.length]);
 
   // ========== 点击指标线弹出配置面板 ==========
   useEffect(() => {
@@ -646,7 +864,12 @@ export const StockChartLW: React.FC<StockChartProps> = ({ data, updateMode, peri
   const hasData = safeData.length > 0;
 
   return (
-    <div className="h-full w-full fin-panel flex flex-col relative" onMouseDown={() => setIndicatorPopup(null)}>
+    <div
+      ref={chartRootRef}
+      tabIndex={0}
+      className="h-full w-full fin-panel flex flex-col relative outline-none"
+      onMouseDown={handleChartRootMouseDown}
+    >
       {/* 加载提示（叠加在图表上方） */}
       {!hasData && (
         <div className="absolute inset-0 z-20 flex items-center justify-center fin-panel">
@@ -924,4 +1147,6 @@ export const StockChartLW: React.FC<StockChartProps> = ({ data, updateMode, peri
       <div className="border-t fin-divider" style={{ height: volumeHeight }} ref={volumeContainerRef} />
     </div>
   );
-};
+});
+
+StockChartLW.displayName = 'StockChartLW';

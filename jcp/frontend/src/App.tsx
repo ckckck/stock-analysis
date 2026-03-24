@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { StockList } from './components/StockList';
-import { StockChartLW } from './components/StockChartLW';
+import { StockChartLW, type StockChartHandle } from './components/StockChartLW';
 import { OrderBook as OrderBookComponent } from './components/OrderBook';
 import { AgentRoom } from './components/AgentRoom';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -23,6 +23,22 @@ import { useMarketEvents } from './hooks/useMarketEvents';
 import { useMarketStatus } from './hooks/useMarketStatus';
 import { formatDateDisplay, formatDateTimeDisplay } from './utils/datetime';
 import {
+  DEFAULT_TEXT_SCALE_PERCENT,
+  clampTextScalePercent,
+  getNextTextScalePercent,
+  resolveTextScaleShortcutDirection,
+} from './utils/textScale';
+import {
+  DEFAULT_KLINE_ZOOM_PERCENT,
+  MAX_KLINE_ZOOM_PERCENT,
+  MIN_KLINE_ZOOM_PERCENT,
+  getNextKlineZoomPercent,
+  isEditableTarget,
+  resolveKlineKeyboardAction,
+  shouldBlurActiveEditableOnPointerDown,
+  shouldFocusKeyboardHostOnPointerDown,
+} from './utils/klineKeyboard';
+import {
   createPendingScreeningSyncStatus,
   formatScreeningSourceName,
   formatScreeningSyncRunStatus,
@@ -34,6 +50,7 @@ import {
   type ScreeningSyncDialogMode,
   type SyncButtonTone,
 } from './utils/screeningSync';
+import { debugAppEvent } from './utils/appLog';
 import {
   AppScreenMode,
   Stock,
@@ -145,7 +162,20 @@ const App: React.FC = () => {
   const [leftPanelWidth, setLeftPanelWidth] = useState(LAYOUT_DEFAULTS.leftPanelWidth);
   const [rightPanelWidth, setRightPanelWidth] = useState(LAYOUT_DEFAULTS.rightPanelWidth);
   const [bottomPanelHeight, setBottomPanelHeight] = useState(LAYOUT_DEFAULTS.bottomPanelHeight);
+  const [textScalePercent, setTextScalePercent] = useState(DEFAULT_TEXT_SCALE_PERCENT);
+  const [klineZoomPercent, setKlineZoomPercent] = useState(DEFAULT_KLINE_ZOOM_PERCENT);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stockChartRef = useRef<StockChartHandle | null>(null);
+  const keyboardHostRef = useRef<HTMLDivElement | null>(null);
+  const editingModeRef = useRef(false);
+
+  const focusKeyboardHost = useCallback((reason: string) => {
+    keyboardHostRef.current?.focus({ preventScroll: true });
+    debugAppEvent('kline-shortcut', 'keyboard host focused', {
+      reason,
+      activeTagName: document.activeElement instanceof HTMLElement ? document.activeElement.tagName : null,
+    });
+  }, []);
 
   const screeningStocks = useMemo(
     () => screeningResults.map(mapScreeningResultToStock),
@@ -434,6 +464,8 @@ const App: React.FC = () => {
   // 保存布局配置（防抖）
   const saveLayoutConfig = useCallback(async (
     left: number, right: number, bottom: number,
+    textScale: number,
+    klineZoom: number,
     winWidth?: number, winHeight?: number
   ) => {
     if (saveTimeoutRef.current) {
@@ -447,6 +479,8 @@ const App: React.FC = () => {
           leftPanelWidth: left,
           rightPanelWidth: right,
           bottomPanelHeight: bottom,
+          textScalePercent: clampTextScalePercent(textScale),
+          klineZoomPercent: Math.max(MIN_KLINE_ZOOM_PERCENT, Math.min(MAX_KLINE_ZOOM_PERCENT, Math.round(klineZoom))),
           windowWidth: winWidth ?? size.w,
           windowHeight: winHeight ?? size.h,
         };
@@ -483,8 +517,8 @@ const App: React.FC = () => {
 
   // resize 结束时保存配置
   const handleResizeEnd = useCallback(() => {
-    saveLayoutConfig(leftPanelWidth, rightPanelWidth, bottomPanelHeight);
-  }, [leftPanelWidth, rightPanelWidth, bottomPanelHeight, saveLayoutConfig]);
+    saveLayoutConfig(leftPanelWidth, rightPanelWidth, bottomPanelHeight, textScalePercent, klineZoomPercent);
+  }, [bottomPanelHeight, klineZoomPercent, leftPanelWidth, rightPanelWidth, saveLayoutConfig, textScalePercent]);
 
   // 监听窗口 resize 事件
   useEffect(() => {
@@ -494,7 +528,7 @@ const App: React.FC = () => {
         clearTimeout(windowResizeTimeoutRef.current);
       }
       windowResizeTimeoutRef.current = setTimeout(() => {
-        saveLayoutConfig(leftPanelWidth, rightPanelWidth, bottomPanelHeight);
+        saveLayoutConfig(leftPanelWidth, rightPanelWidth, bottomPanelHeight, textScalePercent, klineZoomPercent);
       }, 500);
     };
     window.addEventListener('resize', handleWindowResize);
@@ -504,7 +538,162 @@ const App: React.FC = () => {
         clearTimeout(windowResizeTimeoutRef.current);
       }
     };
-  }, [leftPanelWidth, rightPanelWidth, bottomPanelHeight, saveLayoutConfig]);
+  }, [bottomPanelHeight, klineZoomPercent, leftPanelWidth, rightPanelWidth, saveLayoutConfig, textScalePercent]);
+
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${clampTextScalePercent(textScalePercent)}%`;
+  }, [textScalePercent]);
+
+  useEffect(() => {
+    focusKeyboardHost('mount');
+  }, [focusKeyboardHost]);
+
+  useEffect(() => {
+    const handleFocusIn = (event: FocusEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      editingModeRef.current = isEditableTarget(target);
+      debugAppEvent('kline-shortcut', 'editing mode updated by focusin', {
+        editingMode: editingModeRef.current,
+        tagName: target?.tagName ?? null,
+      });
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const activeTarget = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const pointerTarget = event.target instanceof HTMLElement ? event.target : null;
+      if (!shouldBlurActiveEditableOnPointerDown({ activeTarget, pointerTarget })) {
+        if (shouldFocusKeyboardHostOnPointerDown(pointerTarget)) {
+          editingModeRef.current = false;
+          window.requestAnimationFrame(() => {
+            focusKeyboardHost('pointerdown-noneditable');
+          });
+        }
+        return;
+      }
+      activeTarget?.blur();
+      debugAppEvent('kline-shortcut', 'editable focus blurred by pointerdown', {
+        activeTagName: activeTarget?.tagName ?? null,
+        pointerTagName: pointerTarget?.tagName ?? null,
+      });
+      if (shouldFocusKeyboardHostOnPointerDown(pointerTarget)) {
+        editingModeRef.current = false;
+        window.requestAnimationFrame(() => {
+          focusKeyboardHost('pointerdown-after-blur');
+        });
+      }
+    };
+
+    window.addEventListener('focusin', handleFocusIn, true);
+    window.addEventListener('pointerdown', handlePointerDown, true);
+    return () => {
+      window.removeEventListener('focusin', handleFocusIn, true);
+      window.removeEventListener('pointerdown', handlePointerDown, true);
+    };
+  }, [focusKeyboardHost]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key.startsWith('Arrow')) {
+        const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        debugAppEvent('kline-shortcut', 'arrow keydown captured', {
+          key: event.key,
+          targetTagName: event.target instanceof HTMLElement ? event.target.tagName : null,
+          activeTagName: activeElement?.tagName ?? null,
+          activeRole: activeElement?.getAttribute('role') ?? null,
+          activeDataset: activeElement?.dataset ?? null,
+          editingMode: editingModeRef.current,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          shiftKey: event.shiftKey,
+        });
+      }
+
+      const textScaleDirection = resolveTextScaleShortcutDirection(event);
+      if (textScaleDirection) {
+        event.preventDefault();
+
+        setTextScalePercent((current) => {
+          const next = getNextTextScalePercent(current, textScaleDirection);
+          if (next !== current) {
+            saveLayoutConfig(leftPanelWidth, rightPanelWidth, bottomPanelHeight, next, klineZoomPercent);
+          }
+          return next;
+        });
+        return;
+      }
+
+      const klineAction = resolveKlineKeyboardAction({
+        key: event.key,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+        editingMode: editingModeRef.current,
+        target: document.activeElement instanceof HTMLElement ? document.activeElement : (
+          event.target instanceof HTMLElement ? event.target : null
+        ),
+      });
+      if (!klineAction) {
+        if (event.key.startsWith('Arrow')) {
+          const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          debugAppEvent('kline-shortcut', 'arrow key ignored', {
+            key: event.key,
+            tagName: event.target instanceof HTMLElement ? event.target.tagName : null,
+            isContentEditable: event.target instanceof HTMLElement ? event.target.isContentEditable : null,
+            activeTagName: activeElement?.tagName ?? null,
+            editingMode: editingModeRef.current,
+            activeIsEditable: isEditableTarget(activeElement),
+          });
+        }
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (klineAction === 'pan_left') {
+        debugAppEvent('kline-shortcut', 'pan left requested');
+        stockChartRef.current?.panLeft();
+        return;
+      }
+
+      if (klineAction === 'pan_right') {
+        debugAppEvent('kline-shortcut', 'pan right requested');
+        stockChartRef.current?.panRight();
+        return;
+      }
+
+      setKlineZoomPercent((current) => {
+        const next = stockChartRef.current?.getNextEffectiveZoomPercent(klineAction, current ?? DEFAULT_KLINE_ZOOM_PERCENT)
+          ?? getNextKlineZoomPercent(current, klineAction);
+        debugAppEvent('kline-shortcut', 'zoom keydown', {
+          action: klineAction,
+          current,
+          next,
+          min: MIN_KLINE_ZOOM_PERCENT,
+          max: MAX_KLINE_ZOOM_PERCENT,
+          hitBoundary: next === current,
+        });
+        if (next !== current) {
+          saveLayoutConfig(leftPanelWidth, rightPanelWidth, bottomPanelHeight, textScalePercent, next);
+        } else {
+          debugAppEvent('kline-shortcut', 'zoom percent unchanged after clamp', {
+            action: klineAction,
+            current,
+            min: MIN_KLINE_ZOOM_PERCENT,
+            max: MAX_KLINE_ZOOM_PERCENT,
+          });
+        }
+        return next;
+      });
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [bottomPanelHeight, klineZoomPercent, leftPanelWidth, rightPanelWidth, saveLayoutConfig, textScalePercent]);
 
   // 获取快讯列表
   const handleShowTelegraphList = async () => {
@@ -1005,6 +1194,15 @@ const App: React.FC = () => {
           if (appConfig.layout.leftPanelWidth > 0) setLeftPanelWidth(appConfig.layout.leftPanelWidth);
           if (appConfig.layout.rightPanelWidth > 0) setRightPanelWidth(appConfig.layout.rightPanelWidth);
           if (appConfig.layout.bottomPanelHeight > 0) setBottomPanelHeight(appConfig.layout.bottomPanelHeight);
+          if (appConfig.layout.textScalePercent > 0) setTextScalePercent(clampTextScalePercent(appConfig.layout.textScalePercent));
+          if (appConfig.layout.klineZoomPercent > 0) {
+            setKlineZoomPercent(
+              Math.max(
+                MIN_KLINE_ZOOM_PERCENT,
+                Math.min(MAX_KLINE_ZOOM_PERCENT, Math.round(appConfig.layout.klineZoomPercent)),
+              ),
+            );
+          }
           // 恢复窗口大小
           if (appConfig.layout.windowWidth > 0 && appConfig.layout.windowHeight > 0) {
             WindowSetSize(appConfig.layout.windowWidth, appConfig.layout.windowHeight);
@@ -1147,7 +1345,11 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="flex flex-col h-screen text-slate-100 font-sans fin-app">
+    <div
+      ref={keyboardHostRef}
+      tabIndex={-1}
+      className="flex flex-col h-screen text-slate-100 font-sans fin-app outline-none"
+    >
       {/* Top Navbar */}
       <header
         className="h-14 fin-panel border-b fin-divider flex items-center px-4 justify-between shrink-0 z-20"
@@ -1457,8 +1659,10 @@ const App: React.FC = () => {
              {/* Chart Section */}
             <div className="flex-1 p-1 relative min-h-0">
                <StockChartLW
+                  ref={stockChartRef}
                   data={kLineData}
                   updateMode={kLineUpdateMode}
+                  klineZoomPercent={klineZoomPercent}
                   period={timePeriod}
                   onPeriodChange={setTimePeriod}
                   stock={selectedStock}
