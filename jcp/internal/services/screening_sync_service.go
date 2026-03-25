@@ -328,6 +328,18 @@ func (s *ScreeningSyncService) SyncWithOptions(
 	status.ProgressPercent = calculateScreeningSyncPercent(startIndex, len(stocks))
 	progress.CompletedStocks = startIndex
 	progress.ProgressPercent = status.ProgressPercent
+	s.appendStatusEvent(status, ScreeningSyncEvent{
+		Time:   formatScreeningStoreTime(s.now().UTC()),
+		Status: "queue",
+		Message: fmt.Sprintf(
+			"sync queue ready: target=%s total=%d pending=%d resumed=%t limit=%d",
+			targetTradeDate,
+			len(stocks),
+			len(syncSymbols),
+			resumed,
+			options.LimitStocks,
+		),
+	})
 	initialJobState := (*ScreeningSyncJobState)(nil)
 	if resumed {
 		initialJobState = jobState
@@ -369,19 +381,32 @@ func (s *ScreeningSyncService) SyncWithOptions(
 		status.CurrentName = stock.Name
 		status.LastMessage = fmt.Sprintf("syncing %s", stock.Symbol)
 		status.ActiveSource = ""
+		s.appendStatusEvent(status, ScreeningSyncEvent{
+			Time:    formatScreeningStoreTime(s.now().UTC()),
+			Symbol:  stock.Symbol,
+			Name:    stock.Name,
+			Status:  "fetch",
+			Message: fmt.Sprintf(
+				"syncing %s: target=%s localLatest=%s lookback=%d",
+				stock.Symbol,
+				targetTradeDate,
+				latestLocalTradeDates[stock.Symbol],
+				stockLookbackDaysForPreview(lookbackDays, latestLocalTradeDates[stock.Symbol], s.now()),
+			),
+		})
 		s.emitScreeningSyncProgress(buildScreeningSyncProgress(status), report)
 
 		observer := func(event ScreeningDailyBarSourceEvent) {
 			status.ActiveSource = event.Source
 			status.LastMessage = event.Message
-			status.Events = appendBoundedScreeningSyncEvents(status.Events, ScreeningSyncEvent{
+			s.appendStatusEvent(status, ScreeningSyncEvent{
 				Time:    formatScreeningStoreTime(s.now().UTC()),
 				Symbol:  stock.Symbol,
 				Name:    stock.Name,
 				Source:  event.Source,
 				Status:  event.Status,
 				Message: event.Message,
-			}, 20)
+			})
 			s.emitScreeningSyncProgress(buildScreeningSyncProgress(status), report)
 		}
 
@@ -397,6 +422,21 @@ func (s *ScreeningSyncService) SyncWithOptions(
 			status.CurrentStage = "failed"
 			status.Error = fmt.Sprintf("get daily bars for %s: %v", stock.Symbol, err)
 			status.LastMessage = status.Error
+			s.appendStatusEvent(status, ScreeningSyncEvent{
+				Time:    formatScreeningStoreTime(s.now().UTC()),
+				Symbol:  stock.Symbol,
+				Name:    stock.Name,
+				Source:  status.ActiveSource,
+				Status:  "error",
+				Message: fmt.Sprintf(
+					"fetch failed for %s: target=%s localLatest=%s lookback=%d err=%v",
+					stock.Symbol,
+					targetTradeDate,
+					latestLocalTradeDates[stock.Symbol],
+					stockLookbackDays,
+					err,
+				),
+			})
 			s.persistScreeningSyncJobState(scopeKey, options, status, &ScreeningSyncJobState{
 				CurrentIndex:    idx,
 				CompletedStocks: status.CompletedStocks,
@@ -417,6 +457,20 @@ func (s *ScreeningSyncService) SyncWithOptions(
 			status.CompletedStocks = idx + 1
 			status.ProgressPercent = calculateScreeningSyncPercent(status.CompletedStocks, len(stocks))
 			status.LastMessage = fmt.Sprintf("no new bars for %s", stock.Symbol)
+			s.appendStatusEvent(status, ScreeningSyncEvent{
+				Time:    formatScreeningStoreTime(s.now().UTC()),
+				Symbol:  stock.Symbol,
+				Name:    stock.Name,
+				Source:  status.ActiveSource,
+				Status:  "skip",
+				Message: fmt.Sprintf(
+					"no new bars for %s: target=%s localLatest=%s sourceBars=%d",
+					stock.Symbol,
+					targetTradeDate,
+					latestLocalTradeDates[stock.Symbol],
+					len(bars),
+				),
+			})
 			s.persistScreeningSyncJobState(scopeKey, options, status, &ScreeningSyncJobState{
 				CurrentIndex:        idx + 1,
 				CompletedStocks:     status.CompletedStocks,
@@ -470,6 +524,21 @@ func (s *ScreeningSyncService) SyncWithOptions(
 		status.CompletedStocks = idx + 1
 		status.ProgressPercent = calculateScreeningSyncPercent(status.CompletedStocks, len(stocks))
 		status.LastMessage = fmt.Sprintf("completed %d / %d", status.CompletedStocks, len(stocks))
+		s.appendStatusEvent(status, ScreeningSyncEvent{
+			Time:    formatScreeningStoreTime(s.now().UTC()),
+			Symbol:  stock.Symbol,
+			Name:    stock.Name,
+			Source:  status.ActiveSource,
+			Status:  "stored",
+			Message: fmt.Sprintf(
+				"stored %d bars for %s: latest=%s completed=%d/%d",
+				len(filteredBars),
+				stock.Symbol,
+				lastBarDate,
+				status.CompletedStocks,
+				len(stocks),
+			),
+		})
 		s.persistScreeningSyncJobState(scopeKey, options, status, &ScreeningSyncJobState{
 			CurrentIndex:        idx + 1,
 			CompletedStocks:     status.CompletedStocks,
@@ -1092,6 +1161,21 @@ func appendBoundedScreeningSyncEvents(events []ScreeningSyncEvent, event Screeni
 		events = events[len(events)-limit:]
 	}
 	return events
+}
+
+func (s *ScreeningSyncService) appendStatusEvent(status *ScreeningSyncStatus, event ScreeningSyncEvent) {
+	if status == nil {
+		return
+	}
+	status.Events = appendBoundedScreeningSyncEvents(status.Events, event, 20)
+}
+
+func stockLookbackDaysForPreview(defaultLookback int, latestTradeDate string, now time.Time) int {
+	lookbackDays := defaultLookback
+	if latestTradeDate != "" {
+		lookbackDays = maxInt(lookbackDays, screeningIncrementalLookbackDays(latestTradeDate, now))
+	}
+	return lookbackDays
 }
 
 func buildScreeningSyncProgress(status *ScreeningSyncStatus) ScreeningSyncProgress {

@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -615,6 +617,51 @@ func TestScreeningSyncReportsSourceFallbackInProgress(t *testing.T) {
 	}
 	if len(last.Events) == 0 {
 		t.Fatalf("last.Events = %#v, want source history", last.Events)
+	}
+}
+
+func TestScreeningSyncReportsDiagnosticEventWhenStockFetchFails(t *testing.T) {
+	configService, store := newScreeningSyncTestServices(t)
+
+	source := &fakeScreeningMarketSource{
+		stocks: []ScreeningStockBasic{
+			{Symbol: "sh600804", Name: "鹏博士", Market: "上海", IsActive: true},
+		},
+		bars: map[string][]models.KLineData{},
+		tradeDates: []string{"2026-03-25"},
+		dailyBarErrors: map[string]error{
+			"sh600804": fmt.Errorf("kline api status 456 for sh600804: blocked"),
+		},
+	}
+
+	if err := seedDailyBar(t, store, "sh600804", "2026-03-24", 11); err != nil {
+		t.Fatalf("seedDailyBar sh600804 error = %v", err)
+	}
+
+	svc := NewScreeningSyncService(configService, store, source)
+	svc.now = func() time.Time {
+		return time.Date(2026, 3, 25, 16, 0, 0, 0, time.UTC)
+	}
+
+	status, err := svc.SyncWithOptions(context.Background(), ScreeningSyncRunOptions{
+		Mode: ScreeningSyncModeManual,
+	}, nil)
+	if err == nil {
+		t.Fatal("SyncWithOptions() error = nil, want fetch failure")
+	}
+	if status == nil {
+		t.Fatal("status = nil, want failure status")
+	}
+	if len(status.Events) == 0 {
+		t.Fatalf("status.Events = %#v, want diagnostic failure events", status.Events)
+	}
+
+	last := status.Events[len(status.Events)-1]
+	if last.Status != "error" {
+		t.Fatalf("last.Status = %q, want error", last.Status)
+	}
+	if !strings.Contains(last.Message, "sh600804") || !strings.Contains(last.Message, "lookback=") || !strings.Contains(last.Message, "target=") {
+		t.Fatalf("last.Message = %q, want symbol/lookback/target diagnostics", last.Message)
 	}
 }
 

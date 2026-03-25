@@ -124,6 +124,53 @@ describe('createPendingScreeningSyncStatus', () => {
       syncedToLatestStocks: 5,
     });
   });
+
+  it('does not mix market-wide coverage into a new limited sync run', () => {
+    expect(createPendingScreeningSyncStatus({
+      marketScope: '沪市、深市',
+      initialSyncDays: 30,
+      retentionMode: 'forever',
+      retentionDays: 60,
+      lastTradeDate: '2026-03-24',
+      lastSyncedAt: '2026-03-24 10:00:00',
+      targetTradeDate: '2026-03-24',
+      latestSyncedTradeDate: '2026-03-24',
+      stocksSynced: 3750,
+      barsSynced: 999999,
+      snapshotsSynced: 3750,
+      marketStockCount: 3750,
+      syncedToLatestStocks: 3750,
+      pendingSyncStocks: 0,
+      completedStocks: 0,
+      totalStocks: 21,
+      currentStage: 'failed',
+      runStatus: 'failed',
+      limitStocks: 21,
+      events: [
+        {
+          time: '2026-03-25T01:44:42Z',
+          symbol: 'sh600804',
+          name: '鹏博士',
+          source: 'sina',
+          status: 'error',
+          message: 'kline api status 456 for sh600804: blocked',
+        },
+      ],
+    }, {
+      initialSyncDays: 30,
+      retentionMode: 'forever',
+      retentionDays: 60,
+      limitStocks: 21,
+      message: '准备启动同步任务...',
+    })).toMatchObject({
+      runStatus: 'running',
+      progressPercent: 0,
+      completedStocks: 0,
+      totalStocks: 21,
+      currentStage: 'prepare',
+      events: [],
+    });
+  });
 });
 
 describe('resolveScreeningSyncCoverageStats', () => {

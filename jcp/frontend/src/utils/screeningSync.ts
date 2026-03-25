@@ -103,11 +103,26 @@ export const createPendingScreeningSyncStatus = (
     message: string;
   },
 ): ScreeningSyncStatus => {
-  const resumedCompletedStocks = Math.max(
-    current?.completedStocks ?? 0,
-    current?.syncedToLatestStocks ?? 0,
+  const sameLimit = (current?.limitStocks ?? 0) === options.limitStocks;
+  const hasCheckpointProgress = Boolean(
+    current
+    && sameLimit
+    && ['canceled', 'failed'].includes((current.runStatus || '').toLowerCase())
+    && (current.completedStocks ?? 0) > 0
+    && (current.totalStocks ?? 0) >= (current.completedStocks ?? 0),
   );
-  const totalStocks = current?.totalStocks ?? current?.marketStockCount;
+  const resumedCompletedStocks = hasCheckpointProgress ? (current?.completedStocks ?? 0) : 0;
+  const totalStocks = hasCheckpointProgress
+    ? current?.totalStocks
+    : (
+      options.limitStocks > 0
+        ? (
+          (current?.marketStockCount ?? 0) > 0
+            ? Math.min(options.limitStocks, current?.marketStockCount ?? 0)
+            : options.limitStocks
+        )
+        : current?.marketStockCount
+    );
   const progressPercent = totalStocks && totalStocks > 0
     ? Math.max(0, Math.min(100, (resumedCompletedStocks / totalStocks) * 100))
     : 0;
@@ -141,8 +156,8 @@ export const createPendingScreeningSyncStatus = (
   activeSource: '',
   lastMessage: options.message,
   limitStocks: options.limitStocks,
-  resumeFromCheckpoint: false,
-  events: current?.events || [],
+  resumeFromCheckpoint: hasCheckpointProgress,
+  events: [],
   error: undefined,
   });
 };

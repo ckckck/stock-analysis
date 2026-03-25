@@ -10,6 +10,12 @@
    - `startup()` 已启动市场推送；对应逻辑见 `jcp/app.go:211`。
    - 设置页可读取和保存配置；配置接口起点见 `jcp/app.go:243`、`jcp/app.go:248`。
 
+## 验证 Windows 打包图标
+
+1. Windows 安装包与 exe 使用 `jcp/build/windows/icon.ico`；NSIS 安装器也引用同一份图标资源，见 `jcp/build/windows/installer/project.nsi:53`、`jcp/build/windows/installer/project.nsi:54`。
+2. 现在仓库里有一个回归测试会直接比对 `build/appicon.png` 和 `build/windows/icon.ico` 的图像内容，避免只替换了主图标却漏掉 Windows 专用 ico，见 `jcp/icon_test.go:14`。
+3. 本地验证时直接在 `jcp/` 下执行 `go test ./...`；如果 `icon.ico` 和 `appicon.png` 偏差过大，测试会以 `windows icon diverges from appicon` 失败。
+
 ## 新建一次股票分析会话
 
 1. 先确保股票已加入自选；相关接口见 `jcp/app.go:368`、`jcp/app.go:378`。
@@ -36,10 +42,11 @@
    - 顶部栏“龙虎榜”前的同步状态按钮，适合直接看当前同步覆盖率并进入“仅同步”弹框，见 `jcp/frontend/src/App.tsx:1175`、`jcp/frontend/src/App.tsx:1527`。
    - 设置页 `AI筛选` 选项卡，适合调整市场范围、首次同步范围、保留策略、自动同步时间，以及手动同步区里的“立即同步 / 取消 / 只同步前 N 只股票测试”入口；左侧导航里已经不再保留“软件更新”菜单，见 `jcp/frontend/src/components/SettingsDialog.tsx:57`、`jcp/frontend/src/components/SettingsDialog.tsx:313`、`jcp/frontend/src/components/SettingsDialog.tsx:418`。
 2. 首次同步前先确认市场范围。默认勾选沪市和深市，北交所和指数需要手动启用；其中深市创业板个股已在后端股票池构建时被过滤，不会进入同步或筛选，但创业板指数仍可在启用“指数”时保留，见 `jcp/frontend/src/components/SettingsDialog.tsx:1317`、`jcp/internal/services/market_service.go:632`。
-3. 顶部栏入口会先根据本地同步状态显示三种视觉状态：全部完成时显示绿色“已同步”并禁用；部分完成时主文案仍是黄色“立即同步”，但右侧数字会优先显示当前已完成股票数 `(n/总数)`；未同步时显示红色“立即同步 (0/总数)” 或 `(--/--)`。如果用户在同步过程中取消，前端会保留当前已完成数，并在下一次开始时沿用断点进度显示，再继续调用同一个断点续传后端流程，见 `jcp/frontend/src/utils/screeningSync.ts:82`、`jcp/frontend/src/utils/screeningSync.ts:125`、`jcp/frontend/src/App.tsx:823`、`jcp/frontend/src/App.tsx:886`。
+3. 顶部栏入口会先根据本地同步状态显示三种视觉状态：全部完成时显示绿色“已同步”并禁用；部分完成时主文案仍是黄色“立即同步”，但右侧数字会优先显示当前已完成股票数 `(n/总数)`；未同步时显示红色“立即同步 (0/总数)” 或 `(--/--)`。如果用户在同步过程中取消，只有“同一测试范围且确实存在断点”的下一次运行才会继续沿用已完成数；一旦切换成新的范围，前端会把 `completedStocks`、`progressPercent` 和旧事件列表全部清零，避免把上一次失败任务的覆盖率误当成新一轮同步进度，见 `jcp/frontend/src/utils/screeningSync.ts:96`。
 4. 点击“立即同步”后，前端调用 `RunScreeningSync({ mode, limitStocks })`；若勾选测试上限，只会处理前 N 只股票，未勾选则按完整市场范围执行。后端会先写基础股票列表，再按 `sync_state` 判断是首次窗口同步还是按最近交易日增量补齐，见 `jcp/app.go:373`、`jcp/internal/services/screening_sync_service.go:144`、`jcp/internal/services/screening_sync_service.go:194`。
 5. 日线同步取数顺序是 `Baostock -> Sina`。如果 `Baostock` 登录、查询或返回空数据失败，才会回退到现有新浪日线接口；因此同步报错里可能同时带有两段来源上下文，见 `jcp/internal/services/market_service.go:502`、`jcp/internal/services/screening_daily_bar_source.go:38`、`jcp/internal/services/baostock_daily_bar_source.go:116`、`jcp/internal/services/market_service.go:573`。
-6. 无论来自设置页还是顶部栏，同步过程中状态卡都会显示百分比、已完成股票数、当前股票、当前数据源和最近的数据源切换记录；点击“取消”后，本轮会在当前股票处理完成后停下，并把断点写入 `sync_jobs`，下次手动或自动同步都从断点继续，见 `jcp/frontend/src/App.tsx:1676`、`jcp/frontend/src/components/SettingsDialog.tsx:1419`、`jcp/app.go:397`、`jcp/internal/services/screening_store.go:118`、`jcp/internal/services/screening_sync_service.go:267`、`jcp/internal/services/screening_sync_service.go:946`。
+6. 无论来自设置页还是顶部栏，同步过程中状态卡都会显示百分比、已完成股票数、当前股票、当前数据源和最近事件；最近事件现在除了数据源切换外，还会额外记录 `queue`、`fetch`、`skip`、`stored` 和 `error` 五类诊断消息，并把 `target`、`localLatest`、`lookback`、`sourceBars`、`completed` 这类字段写进消息体，方便直接判断是断点续传、无增量数据还是取数失败，见 `jcp/internal/services/screening_sync_service.go:331`、`jcp/internal/services/screening_sync_service.go:384`、`jcp/internal/services/screening_sync_service.go:425`、`jcp/internal/services/screening_sync_service.go:460`、`jcp/internal/services/screening_sync_service.go:527`。
+7. 点击“取消”后，本轮会在当前股票处理完成后停下，并把断点写入 `sync_jobs`；下次手动或自动同步都从该断点继续，但新的同步范围不会继承旧事件列表，见 `jcp/app.go:397`、`jcp/internal/services/screening_store.go:118`、`jcp/internal/services/screening_sync_service.go:267`、`jcp/internal/services/screening_sync_service.go:946`。
 
 ## 首次从欢迎页同步并继续 AI 筛选
 
