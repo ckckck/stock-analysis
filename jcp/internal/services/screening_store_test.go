@@ -242,11 +242,13 @@ func TestScreeningStoreListScreeningUniverseSymbolsUsesMarketScopeAndLimit(t *te
 			('sh600000', '浦发银行', '上海', '银行', '1999-11-10', 0, 1),
 			('sh600519', '贵州茅台', '上海', '白酒', '2001-08-27', 0, 1),
 			('sz000001', '平安银行', '深圳', '银行', '1991-04-03', 0, 1),
+			('sz002231', '问题股票', '深圳', '通信', '2008-05-12', 0, 0),
 			('bj430047', '诺思兰德', '北交所', '医药', '2021-11-15', 0, 1)`,
 		`INSERT INTO daily_bars (symbol, trade_date, open, high, low, close, volume, amount) VALUES
 			('sh600000', '2026-03-19', 10, 11, 9.8, 11, 1000, 10000),
 			('sh600519', '2026-03-19', 20, 21, 19.8, 21, 2000, 20000),
-			('sz000001', '2026-03-19', 30, 31, 29.8, 31, 3000, 30000)`,
+			('sz000001', '2026-03-19', 30, 31, 29.8, 31, 3000, 30000),
+			('sz002231', '2026-01-29', 3.0, 3.1, 2.9, 3.0, 0, 0)`,
 	}
 	for _, statement := range statements {
 		if _, err := store.db.Exec(statement); err != nil {
@@ -255,14 +257,13 @@ func TestScreeningStoreListScreeningUniverseSymbolsUsesMarketScopeAndLimit(t *te
 	}
 
 	symbols, err := store.ListScreeningUniverseSymbols(models.ScreeningMarketScopeConfig{
-		Shanghai: true,
 		Shenzhen: true,
-	}, 2)
+	}, 10)
 	if err != nil {
 		t.Fatalf("ListScreeningUniverseSymbols() error = %v", err)
 	}
 
-	if got, want := symbols, []string{"sh600000", "sh600519"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+	if got, want := symbols, []string{"sz000001"}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("ListScreeningUniverseSymbols() = %#v, want %#v", got, want)
 	}
 }

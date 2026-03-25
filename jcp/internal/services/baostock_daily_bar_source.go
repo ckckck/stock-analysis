@@ -320,13 +320,21 @@ func parseBaoStockKLines(rows [][]string) ([]models.KLineData, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse close: %w", err)
 		}
-		volume, err := strconv.ParseInt(row[5], 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse volume: %w", err)
+		volume := int64(0)
+		if strings.TrimSpace(row[5]) != "" {
+			parsedVolume, err := strconv.ParseInt(row[5], 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("parse volume: %w", err)
+			}
+			volume = parsedVolume
 		}
-		amount, err := strconv.ParseFloat(row[6], 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse amount: %w", err)
+		amount := float64(0)
+		if strings.TrimSpace(row[6]) != "" {
+			parsedAmount, err := strconv.ParseFloat(row[6], 64)
+			if err != nil {
+				return nil, fmt.Errorf("parse amount: %w", err)
+			}
+			amount = parsedAmount
 		}
 
 		bars = append(bars, models.KLineData{

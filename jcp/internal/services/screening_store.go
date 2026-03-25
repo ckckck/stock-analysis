@@ -245,7 +245,8 @@ func (s *ScreeningStore) initSchema() error {
 				ON ls.symbol = sb.symbol
 			LEFT JOIN daily_snapshots ds
 				ON ds.symbol = ls.symbol
-				AND ds.trade_date = ls.trade_date`,
+				AND ds.trade_date = ls.trade_date
+			WHERE sb.is_active = 1`,
 	}
 
 	for _, statement := range statements {
@@ -649,7 +650,8 @@ func (s *ScreeningStore) ListScreeningUniverseSymbols(scopes models.ScreeningMar
 	query := `
 		SELECT DISTINCT sb.symbol
 		FROM stocks_basic sb
-		WHERE EXISTS (
+		WHERE sb.is_active = 1
+		  AND EXISTS (
 			SELECT 1
 			FROM daily_bars db
 			WHERE db.symbol = sb.symbol

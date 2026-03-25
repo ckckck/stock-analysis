@@ -218,6 +218,7 @@ func (s *ScreeningSyncService) SyncWithOptions(
 		s.emitScreeningSyncProgress(progress, report)
 		return status, fmt.Errorf("list screening stocks: %w", err)
 	}
+	stocks = filterActiveScreeningStocks(stocks)
 
 	if options.Mode == ScreeningSyncModeManual && options.LimitStocks > 0 && len(stocks) > options.LimitStocks {
 		stocks = stocks[:options.LimitStocks]
@@ -418,10 +419,9 @@ func (s *ScreeningSyncService) SyncWithOptions(
 		bars, err := s.getScreeningDailyBars(stock.Symbol, stockLookbackDays, observer)
 		if err != nil {
 			screeningSyncLog.Error("sync fetch bars failed: symbol=%s lookback=%d err=%v", stock.Symbol, stockLookbackDays, err)
-			status.RunStatus = string(ScreeningSyncRunStatusFailed)
-			status.CurrentStage = "failed"
-			status.Error = fmt.Sprintf("get daily bars for %s: %v", stock.Symbol, err)
-			status.LastMessage = status.Error
+			status.CompletedStocks = idx + 1
+			status.ProgressPercent = calculateScreeningSyncPercent(status.CompletedStocks, len(stocks))
+			status.LastMessage = fmt.Sprintf("skip %s after fetch failure", stock.Symbol)
 			s.appendStatusEvent(status, ScreeningSyncEvent{
 				Time:    formatScreeningStoreTime(s.now().UTC()),
 				Symbol:  stock.Symbol,
@@ -438,11 +438,12 @@ func (s *ScreeningSyncService) SyncWithOptions(
 				),
 			})
 			s.persistScreeningSyncJobState(scopeKey, options, status, &ScreeningSyncJobState{
-				CurrentIndex:    idx,
-				CompletedStocks: status.CompletedStocks,
-			}, status.Error)
+				CurrentIndex:        idx + 1,
+				CompletedStocks:     status.CompletedStocks,
+				LastCompletedSymbol: stock.Symbol,
+			}, "")
 			s.emitScreeningSyncProgress(buildScreeningSyncProgress(status), report)
-			return status, fmt.Errorf("get daily bars for %s: %w", stock.Symbol, err)
+			continue
 		}
 
 		filteredBars := filterBarsForSync(bars, latestLocalTradeDates[stock.Symbol], cfg.InitialSyncDays)
@@ -1423,6 +1424,20 @@ func extractScreeningSyncSymbols(stocks []ScreeningStockBasic) []string {
 	return symbols
 }
 
+func filterActiveScreeningStocks(stocks []ScreeningStockBasic) []ScreeningStockBasic {
+	if len(stocks) == 0 {
+		return nil
+	}
+	filtered := make([]ScreeningStockBasic, 0, len(stocks))
+	for _, stock := range stocks {
+		if !stock.IsActive && !isScreeningIndexSymbol(stock.Symbol) {
+			continue
+		}
+		filtered = append(filtered, stock)
+	}
+	return filtered
+}
+
 func (s *ScreeningSyncService) attachStoredCounts(status *ScreeningSyncStatus) {
 	if s == nil || s.store == nil || status == nil {
 		return
@@ -1441,6 +1456,7 @@ func (s *ScreeningSyncService) attachCoverageSummary(status *ScreeningSyncStatus
 	if err != nil {
 		return
 	}
+	stocks = filterActiveScreeningStocks(stocks)
 
 	symbols := extractScreeningSyncSymbols(stocks)
 	status.MarketStockCount = len(symbols)

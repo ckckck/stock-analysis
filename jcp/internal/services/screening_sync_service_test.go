@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -646,11 +647,14 @@ func TestScreeningSyncReportsDiagnosticEventWhenStockFetchFails(t *testing.T) {
 	status, err := svc.SyncWithOptions(context.Background(), ScreeningSyncRunOptions{
 		Mode: ScreeningSyncModeManual,
 	}, nil)
-	if err == nil {
-		t.Fatal("SyncWithOptions() error = nil, want fetch failure")
+	if err != nil {
+		t.Fatalf("SyncWithOptions() error = %v", err)
 	}
 	if status == nil {
 		t.Fatal("status = nil, want failure status")
+	}
+	if status.RunStatus != string(ScreeningSyncRunStatusCompleted) {
+		t.Fatalf("status.RunStatus = %q, want completed", status.RunStatus)
 	}
 	if len(status.Events) == 0 {
 		t.Fatalf("status.Events = %#v, want diagnostic failure events", status.Events)
@@ -920,6 +924,88 @@ func TestScreeningSyncBackfillsLaggingSymbolDespiteGlobalSyncState(t *testing.T)
 		t.Fatalf("status.BarsSynced = %d, want 2 for lagging symbol backfill", status.BarsSynced)
 	}
 	assertTableCount(t, store, "daily_bars", 6)
+}
+
+func TestScreeningSyncSkipsInactiveStocks(t *testing.T) {
+	configService, store := newScreeningSyncTestServices(t)
+
+	source := &fakeScreeningMarketSource{
+		stocks: []ScreeningStockBasic{
+			{Symbol: "sz002231", Name: "退市样例", Market: "深圳", IsActive: false},
+			{Symbol: "sz000001", Name: "平安银行", Market: "深圳", IsActive: true},
+		},
+		bars: map[string][]models.KLineData{
+			"sz000001": makeDailyBars("2026-03-18", []float64{12.1}),
+		},
+		snapshots: map[string]models.Stock{
+			"sz000001": {Symbol: "sz000001", Name: "平安银行", Price: 12.1},
+		},
+		tradeDates: []string{"2026-03-19", "2026-03-18"},
+	}
+
+	svc := NewScreeningSyncService(configService, store, source)
+	svc.now = func() time.Time {
+		return time.Date(2026, 3, 19, 16, 0, 0, 0, time.UTC)
+	}
+
+	status, err := svc.SyncWithOptions(context.Background(), ScreeningSyncRunOptions{
+		Mode: ScreeningSyncModeManual,
+	}, nil)
+	if err != nil {
+		t.Fatalf("SyncWithOptions() error = %v", err)
+	}
+	if source.dailyBarCalls["sz002231"] != 0 {
+		t.Fatalf("inactive stock daily bar calls = %d, want 0", source.dailyBarCalls["sz002231"])
+	}
+	if source.dailyBarCalls["sz000001"] != 1 {
+		t.Fatalf("active stock daily bar calls = %d, want 1", source.dailyBarCalls["sz000001"])
+	}
+	if status.TotalStocks != 1 || status.CompletedStocks != 1 {
+		t.Fatalf("status progress = %#v, want only active stock processed", status)
+	}
+}
+
+func TestScreeningSyncContinuesAfterSingleSymbolFailure(t *testing.T) {
+	configService, store := newScreeningSyncTestServices(t)
+
+	source := &fakeScreeningMarketSource{
+		stocks: []ScreeningStockBasic{
+			{Symbol: "sz002231", Name: "问题股票", Market: "深圳", IsActive: true},
+			{Symbol: "sz000001", Name: "平安银行", Market: "深圳", IsActive: true},
+		},
+		bars: map[string][]models.KLineData{
+			"sz000001": makeDailyBars("2026-03-18", []float64{12.1}),
+		},
+		snapshots: map[string]models.Stock{
+			"sz000001": {Symbol: "sz000001", Name: "平安银行", Price: 12.1},
+		},
+		tradeDates: []string{"2026-03-19", "2026-03-18"},
+		dailyBarErrors: map[string]error{
+			"sz002231": errors.New("source blocked"),
+		},
+	}
+
+	svc := NewScreeningSyncService(configService, store, source)
+	svc.now = func() time.Time {
+		return time.Date(2026, 3, 19, 16, 0, 0, 0, time.UTC)
+	}
+
+	status, err := svc.SyncWithOptions(context.Background(), ScreeningSyncRunOptions{
+		Mode: ScreeningSyncModeManual,
+	}, nil)
+	if err != nil {
+		t.Fatalf("SyncWithOptions() error = %v", err)
+	}
+	if status.RunStatus != string(ScreeningSyncRunStatusCompleted) {
+		t.Fatalf("status.RunStatus = %q, want completed", status.RunStatus)
+	}
+	if source.dailyBarCalls["sz002231"] != 1 || source.dailyBarCalls["sz000001"] != 1 {
+		t.Fatalf("dailyBarCalls = %#v, want both symbols processed", source.dailyBarCalls)
+	}
+	if status.CompletedStocks != 2 || status.TotalStocks != 2 {
+		t.Fatalf("status progress = %#v, want all symbols accounted for", status)
+	}
+	assertTableCount(t, store, "daily_bars", 1)
 }
 
 type fakeScreeningMarketSource struct {

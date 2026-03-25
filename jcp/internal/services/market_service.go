@@ -34,7 +34,8 @@ var (
 
 const (
 	sinaStockURL = "http://hq.sinajs.cn/rn=%d&list=%s"
-	sinaKLineURL = "http://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=%s&scale=%s&ma=5,10,20&datalen=%d"
+	sinaKLineURL          = "http://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=%s&scale=%s&ma=5,10,20&datalen=%d"
+	sinaScreeningKLineURL = "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=%s&scale=240&ma=no&datalen=%d"
 )
 
 const (
@@ -510,11 +511,43 @@ func (ms *MarketService) GetScreeningDailyBarsWithObserver(symbol string, lookba
 		source = newScreeningDailyBarSourceChain(
 			newBaoStockDailyBarSource(),
 			screeningDailyBarSourceFunc(func(symbol string, lookbackDays int, _ ScreeningDailyBarSourceObserver) ([]models.KLineData, error) {
-				return ms.GetKLineData(symbol, "1d", lookbackDays)
+				return ms.fetchScreeningKLineData(symbol, lookbackDays)
 			}),
 		)
 	}
 	return source.Fetch(symbol, lookbackDays, observer)
+}
+
+func (ms *MarketService) fetchScreeningKLineData(code string, days int) ([]models.KLineData, error) {
+	url := fmt.Sprintf(sinaScreeningKLineURL, code, days)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Referer", "http://finance.sina.com.cn")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	resp, err := ms.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf(
+			"kline api status %d for %s: %s",
+			resp.StatusCode,
+			code,
+			httpErrorPreview(body),
+		)
+	}
+
+	return ms.parseKLineData(string(body))
 }
 
 // GetScreeningSnapshots 返回 AI 筛选同步使用的最新快照。

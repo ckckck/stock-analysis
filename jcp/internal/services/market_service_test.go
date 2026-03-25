@@ -47,6 +47,41 @@ func TestFetchKLineDataReturnsHTTPStatusErrorBeforeJSONParsing(t *testing.T) {
 	}
 }
 
+func TestFetchScreeningKLineDataUsesNewSinaEndpoint(t *testing.T) {
+	ms := &MarketService{
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.String() != "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=sz002231&scale=240&ma=no&datalen=120" {
+					t.Fatalf("url = %q", req.URL.String())
+				}
+				if got := req.Header.Get("Referer"); got != "http://finance.sina.com.cn" {
+					t.Fatalf("Referer = %q, want finance referer", got)
+				}
+				if got := req.Header.Get("User-Agent"); got == "" {
+					t.Fatal("User-Agent = empty, want request header")
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(
+						`[{"day":"2026-03-18","open":"3.040","high":"3.090","low":"3.030","close":"3.070","volume":"10966540"}]`,
+					)),
+					Request: req,
+				}, nil
+			}),
+		},
+	}
+
+	got, err := ms.fetchScreeningKLineData("sz002231", 120)
+	if err != nil {
+		t.Fatalf("fetchScreeningKLineData() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Time != "2026-03-18" || got[0].Close != 3.07 || got[0].Volume != 10966540 {
+		t.Fatalf("fetchScreeningKLineData() = %#v", got)
+	}
+}
+
 func TestGetScreeningDailyBarsUsesScreeningSource(t *testing.T) {
 	want := []models.KLineData{{Time: "2026-03-18", Close: 12.3}}
 	source := screeningDailyBarSourceFunc(func(symbol string, lookbackDays int, _ ScreeningDailyBarSourceObserver) ([]models.KLineData, error) {
@@ -184,6 +219,23 @@ func TestParseBaoStockKLines(t *testing.T) {
 	}
 	if got[1].Time != "2026-03-18" || got[1].Close != 10.6 || got[1].Volume != 1200 {
 		t.Fatalf("parseBaoStockKLines() second row = %#v", got[1])
+	}
+}
+
+func TestParseBaoStockKLinesAllowsEmptyVolumeAndAmount(t *testing.T) {
+	rows := [][]string{
+		{"2026-01-29", "3.04", "3.09", "3.03", "3.07", "", ""},
+	}
+
+	got, err := parseBaoStockKLines(rows)
+	if err != nil {
+		t.Fatalf("parseBaoStockKLines() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(parseBaoStockKLines()) = %d, want 1", len(got))
+	}
+	if got[0].Volume != 0 || got[0].Amount != 0 {
+		t.Fatalf("parseBaoStockKLines() row = %#v, want zero volume/amount", got[0])
 	}
 }
 
