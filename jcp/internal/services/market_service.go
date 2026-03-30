@@ -41,9 +41,10 @@ var (
 )
 
 const (
-	sinaStockURL = "http://hq.sinajs.cn/rn=%d&list=%s"
+	sinaStockURL          = "http://hq.sinajs.cn/rn=%d&list=%s"
 	sinaKLineURL          = "http://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=%s&scale=%s&ma=5,10,20&datalen=%d"
 	sinaScreeningKLineURL = "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=%s&scale=240&ma=no&datalen=%d"
+	eastmoneyKLineURL     = "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=%s&klt=%s&fqt=0&lmt=%d&end=20500101&iscca=1&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
 )
 
 const (
@@ -471,6 +472,10 @@ func (ms *MarketService) calculateOrderBookTotals(items []models.OrderBookItem) 
 
 // GetKLineData 获取K线数据（带缓存）
 func (ms *MarketService) GetKLineData(code string, period string, days int) ([]models.KLineData, error) {
+	return ms.getKLineDataWithRequestID("", code, period, days)
+}
+
+func (ms *MarketService) getKLineDataWithRequestID(requestID string, code string, period string, days int) ([]models.KLineData, error) {
 	cacheKey := fmt.Sprintf("%s:%s:%d", code, period, days)
 	ttl := ms.getKLineCacheTTL(period)
 
@@ -490,7 +495,7 @@ func (ms *MarketService) GetKLineData(code string, period string, days int) ([]m
 	log.Info("module=market action=kline.fetch.start symbol=%s period=%s days=%d", code, period, days)
 
 	// 从API获取数据
-	klines, err := ms.fetchKLineData(code, period, days)
+	klines, err := ms.fetchKLineDataWithRequestID(requestID, code, period, days)
 	if err != nil {
 		log.Warn("module=market action=kline.fetch.failed symbol=%s period=%s days=%d err=%v", code, period, days, err)
 		return nil, err
@@ -514,7 +519,7 @@ func (ms *MarketService) GetKLineDataWithRequest(requestID string, code string, 
 	requestField := requestIDField(requestID)
 	startedAt := time.Now()
 	log.Info("module=market action=kline.fetch.start%s symbol=%s period=%s days=%d", requestField, code, period, days)
-	klines, err := ms.GetKLineData(code, period, days)
+	klines, err := ms.getKLineDataWithRequestID(requestID, code, period, days)
 	if err != nil {
 		log.Warn("module=market action=kline.fetch.failed%s symbol=%s period=%s days=%d durationMs=%d err=%v", requestField, code, period, days, time.Since(startedAt).Milliseconds(), err)
 		return nil, err
@@ -664,6 +669,11 @@ func (ms *MarketService) GetScreeningSnapshots(symbols []string) ([]models.Stock
 
 // fetchKLineData 从API获取K线数据
 func (ms *MarketService) fetchKLineData(code string, period string, days int) ([]models.KLineData, error) {
+	return ms.fetchKLineDataWithRequestID("", code, period, days)
+}
+
+func (ms *MarketService) fetchKLineDataWithRequestID(requestID string, code string, period string, days int) ([]models.KLineData, error) {
+	requestField := requestIDField(requestID)
 	scale := ms.periodToScale(period)
 	url := fmt.Sprintf(sinaKLineURL, code, scale, days)
 	startedAt := time.Now()
@@ -681,14 +691,30 @@ func (ms *MarketService) fetchKLineData(code string, period string, days int) ([
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		err = fmt.Errorf(
+		responsePreview := httpErrorPreview(body)
+		sinaErr := fmt.Errorf(
 			"kline api status %d for %s: %s",
 			resp.StatusCode,
 			code,
-			httpErrorPreview(body),
+			responsePreview,
 		)
-		log.Warn("module=market action=kline.fetch.http_status_failed symbol=%s period=%s days=%d durationMs=%d err=%v", code, period, days, time.Since(startedAt).Milliseconds(), err)
-		return nil, err
+		if shouldFallbackToEastmoneyKLine(resp.StatusCode, body) {
+			fallbackURL, klines, fallbackErr := ms.fetchEastmoneyKLineData(code, period, days)
+			log.Info("module=market action=kline.fetch.fallback.start%s source=sina fallback=eastmoney symbol=%s period=%s days=%d status=%d sinaUrl=%s responsePreview=%q durationMs=%d err=%v", requestField, code, period, days, resp.StatusCode, url, responsePreview, time.Since(startedAt).Milliseconds(), sinaErr)
+			if fallbackErr == nil {
+				if period == "1m" {
+					klines = ms.filterTodayKLines(klines)
+					klines = ms.calculateAvgLine(klines)
+				}
+				log.Info("module=market action=kline.fetch.fallback.success%s source=eastmoney symbol=%s period=%s days=%d fallbackUrl=%s resultLen=%d durationMs=%d", requestField, code, period, days, fallbackURL, len(klines), time.Since(startedAt).Milliseconds())
+				return klines, nil
+			}
+			err = fmt.Errorf("%w; eastmoney fallback failed: %v", sinaErr, fallbackErr)
+			log.Warn("module=market action=kline.fetch.fallback.failed%s source=eastmoney symbol=%s period=%s days=%d fallbackUrl=%s durationMs=%d err=%v", requestField, code, period, days, fallbackURL, time.Since(startedAt).Milliseconds(), err)
+			return nil, err
+		}
+		log.Warn("module=market action=kline.fetch.http_status_failed symbol=%s period=%s days=%d durationMs=%d err=%v", code, period, days, time.Since(startedAt).Milliseconds(), sinaErr)
+		return nil, sinaErr
 	}
 
 	klines, err := ms.parseKLineData(string(body))
@@ -705,6 +731,161 @@ func (ms *MarketService) fetchKLineData(code string, period string, days int) ([
 	log.Debug("module=market action=kline.fetch.loaded symbol=%s period=%s days=%d resultLen=%d durationMs=%d", code, period, days, len(klines), time.Since(startedAt).Milliseconds())
 
 	return klines, nil
+}
+
+func shouldFallbackToEastmoneyKLine(statusCode int, body []byte) bool {
+	if statusCode == 456 {
+		return true
+	}
+	preview := strings.ToLower(httpErrorPreview(body))
+	return strings.Contains(preview, "blocked") || strings.Contains(preview, "拒绝访问")
+}
+
+func (ms *MarketService) fetchEastmoneyKLineData(code string, period string, days int) (string, []models.KLineData, error) {
+	secID, err := normalizeEastmoneySecID(code)
+	if err != nil {
+		return "", nil, err
+	}
+	url := fmt.Sprintf(eastmoneyKLineURL, secID, eastmoneyKLineType(period), days)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return url, nil, err
+	}
+	req.Header.Set("Referer", "https://quote.eastmoney.com/")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	resp, err := ms.client.Do(req)
+	if err != nil {
+		return url, nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return url, nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return url, nil, fmt.Errorf(
+			"eastmoney kline api status %d for %s: %s",
+			resp.StatusCode,
+			code,
+			httpErrorPreview(body),
+		)
+	}
+
+	klines, parseErr := parseEastmoneyKLineData(body)
+	return url, klines, parseErr
+}
+
+func normalizeEastmoneySecID(code string) (string, error) {
+	code = strings.TrimSpace(strings.ToLower(code))
+	if len(code) != 8 {
+		return "", fmt.Errorf("unsupported eastmoney symbol %q", code)
+	}
+	symbol := code[2:]
+	switch {
+	case strings.HasPrefix(code, "sh"):
+		return "1." + symbol, nil
+	case strings.HasPrefix(code, "sz"):
+		return "0." + symbol, nil
+	default:
+		return "", fmt.Errorf("unsupported eastmoney symbol %q", code)
+	}
+}
+
+func eastmoneyKLineType(period string) string {
+	switch period {
+	case "1m":
+		return "1"
+	case "1w":
+		return "102"
+	case "1mo":
+		return "103"
+	default:
+		return "101"
+	}
+}
+
+func parseEastmoneyKLineData(body []byte) ([]models.KLineData, error) {
+	type eastmoneyKLineResponse struct {
+		RC   int `json:"rc"`
+		Data *struct {
+			KLines []string `json:"klines"`
+		} `json:"data"`
+	}
+
+	var response eastmoneyKLineResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+	if response.RC != 0 {
+		return nil, fmt.Errorf("eastmoney kline api rc=%d", response.RC)
+	}
+	if response.Data == nil {
+		return nil, fmt.Errorf("eastmoney kline api missing data")
+	}
+
+	klines := make([]models.KLineData, 0, len(response.Data.KLines))
+	for _, line := range response.Data.KLines {
+		fields := strings.Split(line, ",")
+		if len(fields) < 7 {
+			return nil, fmt.Errorf("unexpected eastmoney kline row %q", line)
+		}
+
+		openPrice, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse eastmoney open: %w", err)
+		}
+		closePrice, err := strconv.ParseFloat(fields[2], 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse eastmoney close: %w", err)
+		}
+		highPrice, err := strconv.ParseFloat(fields[3], 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse eastmoney high: %w", err)
+		}
+		lowPrice, err := strconv.ParseFloat(fields[4], 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse eastmoney low: %w", err)
+		}
+		volume, err := parseEastmoneyKLineInt64(fields[5])
+		if err != nil {
+			return nil, fmt.Errorf("parse eastmoney volume: %w", err)
+		}
+		amount, err := strconv.ParseFloat(fields[6], 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse eastmoney amount: %w", err)
+		}
+
+		klines = append(klines, models.KLineData{
+			Time:   fields[0],
+			Open:   openPrice,
+			High:   highPrice,
+			Low:    lowPrice,
+			Close:  closePrice,
+			Volume: volume,
+			Amount: amount,
+		})
+	}
+
+	return klines, nil
+}
+
+func parseEastmoneyKLineInt64(value string) (int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	parsedInt, err := strconv.ParseInt(value, 10, 64)
+	if err == nil {
+		return parsedInt, nil
+	}
+	parsedFloat, floatErr := strconv.ParseFloat(value, 64)
+	if floatErr != nil {
+		return 0, err
+	}
+	return int64(parsedFloat), nil
 }
 
 func httpErrorPreview(body []byte) string {

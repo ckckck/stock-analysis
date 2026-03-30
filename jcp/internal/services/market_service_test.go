@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -47,6 +48,48 @@ func TestFetchKLineDataReturnsHTTPStatusErrorBeforeJSONParsing(t *testing.T) {
 	}
 	if strings.Contains(got, "invalid character '<'") {
 		t.Fatalf("fetchKLineData() error = %q, should not expose raw json parse error", got)
+	}
+}
+
+func TestFetchKLineDataFallsBackToEastmoneyWhenSinaReturnsBlocked(t *testing.T) {
+	ms := &MarketService{
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				switch {
+				case strings.Contains(req.URL.Host, "quotes.sina.cn"):
+					return &http.Response{
+						StatusCode: 456,
+						Status:     "456 blocked",
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(`<!doctype html><html><body><h1>拒绝访问</h1></body></html>`)),
+						Request:    req,
+					}, nil
+				case strings.Contains(req.URL.Host, "push2his.eastmoney.com"):
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: io.NopCloser(strings.NewReader(
+							`{"rc":0,"data":{"code":"600519","name":"贵州茅台","klines":["2026-03-17,1468.00,1485.00,1498.07,1461.19,49454,7347310632.00,2.53,1.70,24.82,0.39","2026-03-18,1489.00,1468.80,1496.50,1463.15,35551,5239992522.00,2.25,-1.09,-16.20,0.28"]}}`,
+						)),
+						Request: req,
+					}, nil
+				default:
+					return nil, fmt.Errorf("unexpected request: %s", req.URL.String())
+				}
+			}),
+		},
+	}
+
+	got, err := ms.fetchKLineData("sh600519", "1d", 30)
+	if err != nil {
+		t.Fatalf("fetchKLineData() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(fetchKLineData()) = %d, want 2", len(got))
+	}
+	if got[0].Time != "2026-03-17" || got[0].Close != 1485 || got[0].Volume != 49454 {
+		t.Fatalf("fetchKLineData() first row = %#v", got[0])
 	}
 }
 
@@ -155,6 +198,82 @@ func TestGetKLineDataWithRequestLogsRequestID(t *testing.T) {
 	text := string(content)
 	if !strings.Contains(text, "requestId=kline-7") {
 		t.Fatalf("log file = %q, want requestId", text)
+	}
+}
+
+func TestGetKLineDataWithRequestLogsFallbackDiagnostics(t *testing.T) {
+	t.Cleanup(func() {
+		logger.Close()
+		logger.SetGlobalLevel(logger.INFO)
+		logger.SetConsoleOutput(true)
+	})
+
+	logger.SetConsoleOutput(false)
+	logger.SetGlobalLevel(logger.DEBUG)
+	logDir := t.TempDir()
+	if err := logger.InitFileLogger(logDir); err != nil {
+		t.Fatalf("InitFileLogger() error = %v", err)
+	}
+
+	ms := &MarketService{
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				switch {
+				case strings.Contains(req.URL.Host, "quotes.sina.cn"):
+					return &http.Response{
+						StatusCode: 456,
+						Status:     "456 blocked",
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(`<!doctype html><html><body><h1>拒绝访问</h1></body></html>`)),
+						Request:    req,
+					}, nil
+				case strings.Contains(req.URL.Host, "push2his.eastmoney.com"):
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: io.NopCloser(strings.NewReader(
+							`{"rc":0,"data":{"code":"600519","name":"贵州茅台","klines":["2026-03-17,1468.00,1485.00,1498.07,1461.19,49454,7347310632.00,2.53,1.70,24.82,0.39"]}}`,
+						)),
+						Request: req,
+					}, nil
+				default:
+					return nil, fmt.Errorf("unexpected request: %s", req.URL.String())
+				}
+			}),
+		},
+		klineCache:    make(map[string]*klineCache),
+		klineCacheTTL: 30 * time.Second,
+	}
+
+	if _, err := ms.GetKLineDataWithRequest("kline-fallback-1", "sh600519", "1d", 30); err != nil {
+		t.Fatalf("GetKLineDataWithRequest() error = %v", err)
+	}
+
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	for _, want := range []string{
+		"module=market action=kline.fetch.fallback.start",
+		"requestId=kline-fallback-1",
+		"source=sina",
+		"fallback=eastmoney",
+		"status=456",
+		"sinaUrl=http://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=sh600519&scale=240&ma=5,10,20&datalen=30",
+		"responsePreview=\"<!doctype html><html><body><h1>拒绝访问</h1></body></html>\"",
+		"module=market action=kline.fetch.fallback.success",
+		"source=eastmoney",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("log file = %q, want %q", text, want)
+		}
 	}
 }
 
