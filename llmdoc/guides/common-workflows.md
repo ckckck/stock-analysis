@@ -10,7 +10,7 @@
    - `startup()` 已启动市场推送；对应逻辑见 `jcp/app.go:211`。
    - 设置页可读取和保存配置；配置接口起点见 `jcp/app.go:243`、`jcp/app.go:248`。
 5. 若要排查“启动是否最大化 / 前端是否覆盖了窗口状态”，优先看当日日志中的 `frontend: [window] startup layout restore evaluated`；其中 `isMaximized`、`restoreWindowSizeSkipped` 和 `restoreReason` 能直接说明启动时窗口状态判定与布局恢复决策。
-6. 若要排查“为什么 curl 直接调新浪 K 线接口成功，但程序里 K 线加载失败”，优先看当日日志中的 `module=market action=kline.fetch.fallback.start` / `kline.fetch.fallback.success`。普通 K 线链路现在会在 `INFO` 下记录 `requestId`、`sinaUrl`、`responsePreview`、`fallbackUrl` 和最终是否回退成功，因此可以把程序日志里的请求 URL 与同机 `curl` 命令逐项对照，见 `jcp/internal/services/market_service.go:517`、`jcp/internal/services/market_service.go:675`、`jcp/internal/services/market_service_test.go:204`。
+6. 若要排查“为什么 curl 直接调新浪 K 线接口成功，但程序里 K 线加载失败”，优先看当日日志中的 `module=market action=kline.fetch.fallback.start` / `kline.fetch.fallback.success` / `kline.fetch.fallback.retry` / `kline.fetch.stale_cache_used` / `kline.fetch.cooldown_stale_cache_used`。普通 K 线链路现在会在 `INFO`/`WARN` 下记录 `requestId`、`sinaUrl`、`responsePreview`、`fallbackUrl`、Eastmoney 重试次数，以及是否命中 stale/cooldown 兜底，因此可以区分“上游恢复成功”“仍然失败但旧缓存顶住了”“短时间内直接跳过重复远端请求”这三类现场结果。前端风控 toast 只会在 `frontend retries exhausted` 且该股票从未成功拿到过任何 K 线时出现；如果之前已经成功过，就算后续远端失败也只应看到旧图，不应再弹这个提示。
 
 ## 验证 Windows 打包图标
 

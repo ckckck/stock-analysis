@@ -50,6 +50,9 @@ const (
 const (
 	klineCacheTTLIntraday = 2 * time.Second
 	klineCacheTTLDefault  = 30 * time.Second
+	klineStaleTTLDefault  = 24 * time.Hour
+	klineFailureCooldown  = 20 * time.Second
+	eastmoneyRetryDelay   = 150 * time.Millisecond
 )
 
 // 默认大盘指数代码
@@ -82,6 +85,11 @@ type klineCache struct {
 	data      []models.KLineData
 	timestamp time.Time
 	ttl       time.Duration
+}
+
+type klineFailureState struct {
+	lastFailureAt time.Time
+	err           error
 }
 
 // MarketStatus 市场交易状态
@@ -122,6 +130,8 @@ type MarketService struct {
 	klineCache    map[string]*klineCache
 	klineCacheMu  sync.RWMutex
 	klineCacheTTL time.Duration
+	klineFailures   map[string]klineFailureState
+	klineFailureMu  sync.RWMutex
 }
 
 // NewMarketService 创建市场数据服务
@@ -132,6 +142,7 @@ func NewMarketService() *MarketService {
 		cacheTTL:      2 * time.Second, // 股票缓存2秒
 		klineCache:    make(map[string]*klineCache),
 		klineCacheTTL: klineCacheTTLDefault, // 日/周/月K使用较长缓存，减少API调用
+		klineFailures: make(map[string]klineFailureState),
 	}
 	// 启动缓存清理协程
 	go ms.cleanCacheLoop()
@@ -167,12 +178,21 @@ func (ms *MarketService) cleanExpiredCache() {
 		if ttl <= 0 {
 			ttl = ms.klineCacheTTL
 		}
-		// 使用 3 倍 TTL 做内存回收，避免活跃缓存被过早清理
-		if now.Sub(cached.timestamp) > ttl*3 {
+		staleTTL := ms.getKLineStaleTTLFromTTL(ttl)
+		// 使用更长的 stale TTL 做内存回收，尽量保留最后一次成功结果供失败时兜底
+		if now.Sub(cached.timestamp) > staleTTL {
 			delete(ms.klineCache, key)
 		}
 	}
 	ms.klineCacheMu.Unlock()
+
+	ms.klineFailureMu.Lock()
+	for key, state := range ms.klineFailures {
+		if now.Sub(state.lastFailureAt) > klineFailureCooldown {
+			delete(ms.klineFailures, key)
+		}
+	}
+	ms.klineFailureMu.Unlock()
 }
 
 // getKLineCacheTTL 返回不同周期的缓存策略
@@ -182,6 +202,58 @@ func (ms *MarketService) getKLineCacheTTL(period string) time.Duration {
 		return klineCacheTTLIntraday
 	}
 	return ms.klineCacheTTL
+}
+
+func (ms *MarketService) getKLineStaleTTL(period string) time.Duration {
+	return ms.getKLineStaleTTLFromTTL(ms.getKLineCacheTTL(period))
+}
+
+func (ms *MarketService) getKLineStaleTTLFromTTL(ttl time.Duration) time.Duration {
+	if ttl <= 0 {
+		ttl = klineCacheTTLDefault
+	}
+	if ttl < klineStaleTTLDefault {
+		return klineStaleTTLDefault
+	}
+	return ttl * 3
+}
+
+func klineCacheKey(code string, period string, days int) string {
+	return fmt.Sprintf("%s:%s:%d", code, period, days)
+}
+
+func (ms *MarketService) shouldUseCooldownStaleCache(cacheKey string, staleCache []models.KLineData) (error, bool) {
+	if len(staleCache) == 0 {
+		return nil, false
+	}
+	ms.klineFailureMu.RLock()
+	state, ok := ms.klineFailures[cacheKey]
+	ms.klineFailureMu.RUnlock()
+	if !ok || time.Since(state.lastFailureAt) > klineFailureCooldown {
+		return nil, false
+	}
+	return state.err, true
+}
+
+func (ms *MarketService) noteKLineFetchFailure(code string, period string, days int, err error) {
+	if err == nil {
+		return
+	}
+	ms.klineFailureMu.Lock()
+	if ms.klineFailures == nil {
+		ms.klineFailures = make(map[string]klineFailureState)
+	}
+	ms.klineFailures[klineCacheKey(code, period, days)] = klineFailureState{
+		lastFailureAt: time.Now(),
+		err:           err,
+	}
+	ms.klineFailureMu.Unlock()
+}
+
+func (ms *MarketService) clearKLineFetchFailure(code string, period string, days int) {
+	ms.klineFailureMu.Lock()
+	delete(ms.klineFailures, klineCacheKey(code, period, days))
+	ms.klineFailureMu.Unlock()
 }
 
 // GetStockDataWithOrderBook 获取股票实时数据（含真实盘口），带缓存
@@ -476,8 +548,10 @@ func (ms *MarketService) GetKLineData(code string, period string, days int) ([]m
 }
 
 func (ms *MarketService) getKLineDataWithRequestID(requestID string, code string, period string, days int) ([]models.KLineData, error) {
-	cacheKey := fmt.Sprintf("%s:%s:%d", code, period, days)
+	cacheKey := klineCacheKey(code, period, days)
 	ttl := ms.getKLineCacheTTL(period)
+	staleTTL := ms.getKLineStaleTTL(period)
+	var staleCache []models.KLineData
 
 	// 检查缓存
 	ms.klineCacheMu.RLock()
@@ -490,13 +564,25 @@ func (ms *MarketService) getKLineDataWithRequestID(requestID string, code string
 			ms.klineCacheMu.RUnlock()
 			return cached.data, nil
 		}
+		if time.Since(cached.timestamp) < staleTTL {
+			staleCache = append([]models.KLineData(nil), cached.data...)
+		}
 	}
 	ms.klineCacheMu.RUnlock()
+	if cooldownErr, shouldUseCooldown := ms.shouldUseCooldownStaleCache(cacheKey, staleCache); shouldUseCooldown {
+		log.Warn("module=market action=kline.fetch.cooldown_stale_cache_used%s symbol=%s period=%s days=%d staleResultLen=%d err=%v", requestIDField(requestID), code, period, days, len(staleCache), cooldownErr)
+		return staleCache, nil
+	}
 	log.Info("module=market action=kline.fetch.start symbol=%s period=%s days=%d", code, period, days)
 
 	// 从API获取数据
 	klines, err := ms.fetchKLineDataWithRequestID(requestID, code, period, days)
 	if err != nil {
+		ms.noteKLineFetchFailure(code, period, days, err)
+		if len(staleCache) > 0 {
+			log.Warn("module=market action=kline.fetch.stale_cache_used%s symbol=%s period=%s days=%d staleResultLen=%d err=%v", requestIDField(requestID), code, period, days, len(staleCache), err)
+			return staleCache, nil
+		}
 		log.Warn("module=market action=kline.fetch.failed symbol=%s period=%s days=%d err=%v", code, period, days, err)
 		return nil, err
 	}
@@ -509,6 +595,7 @@ func (ms *MarketService) getKLineDataWithRequestID(requestID string, code string
 		ttl:       ttl,
 	}
 	ms.klineCacheMu.Unlock()
+	ms.clearKLineFetchFailure(code, period, days)
 	log.Info("module=market action=kline.fetch.success symbol=%s period=%s days=%d resultLen=%d", code, period, days, len(klines))
 
 	return klines, nil
@@ -701,6 +788,15 @@ func (ms *MarketService) fetchKLineDataWithRequestID(requestID string, code stri
 		if shouldFallbackToEastmoneyKLine(resp.StatusCode, body) {
 			fallbackURL, klines, fallbackErr := ms.fetchEastmoneyKLineData(code, period, days)
 			log.Info("module=market action=kline.fetch.fallback.start%s source=sina fallback=eastmoney symbol=%s period=%s days=%d status=%d sinaUrl=%s responsePreview=%q durationMs=%d err=%v", requestField, code, period, days, resp.StatusCode, url, responsePreview, time.Since(startedAt).Milliseconds(), sinaErr)
+			maxRetries := 1
+			if period == "1d" {
+				maxRetries = 2
+			}
+			for attempt := 1; fallbackErr != nil && shouldRetryEastmoneyKLine(fallbackErr) && attempt <= maxRetries; attempt++ {
+				log.Warn("module=market action=kline.fetch.fallback.retry%s source=eastmoney symbol=%s period=%s days=%d attempt=%d fallbackUrl=%s durationMs=%d err=%v", requestField, code, period, days, attempt, fallbackURL, time.Since(startedAt).Milliseconds(), fallbackErr)
+				time.Sleep(eastmoneyRetryDelay * time.Duration(attempt))
+				fallbackURL, klines, fallbackErr = ms.fetchEastmoneyKLineData(code, period, days)
+			}
 			if fallbackErr == nil {
 				if period == "1m" {
 					klines = ms.filterTodayKLines(klines)
@@ -900,6 +996,14 @@ func httpErrorPreview(body []byte) string {
 		return preview[:160] + "..."
 	}
 	return preview
+}
+
+func shouldRetryEastmoneyKLine(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "eof") || strings.Contains(message, "connection reset") || strings.Contains(message, "broken pipe")
 }
 
 func getStringField(item []interface{}, fieldIndexes map[string]int, field string) string {

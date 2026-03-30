@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -274,6 +275,209 @@ func TestGetKLineDataWithRequestLogsFallbackDiagnostics(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("log file = %q, want %q", text, want)
 		}
+	}
+}
+
+func TestGetKLineDataUsesStaleCacheWhenFetchAndFallbackFail(t *testing.T) {
+	stale := []models.KLineData{{Time: "2026-03-18", Close: 12.3}}
+	ms := &MarketService{
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				switch {
+				case strings.Contains(req.URL.Host, "quotes.sina.cn"):
+					return &http.Response{
+						StatusCode: 456,
+						Status:     "456 blocked",
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(`<!doctype html><html><body><h1>拒绝访问</h1></body></html>`)),
+						Request:    req,
+					}, nil
+				case strings.Contains(req.URL.Host, "push2his.eastmoney.com"):
+					return nil, fmt.Errorf("Get %q: EOF", req.URL.String())
+				default:
+					return nil, fmt.Errorf("unexpected request: %s", req.URL.String())
+				}
+			}),
+		},
+		klineCache: map[string]*klineCache{
+			"sz002263:1d:240": {
+				data:      stale,
+				timestamp: time.Now().Add(-time.Minute),
+				ttl:       30 * time.Second,
+			},
+		},
+		klineCacheTTL: 30 * time.Second,
+	}
+
+	got, err := ms.GetKLineDataWithRequest("kline-stale-1", "sz002263", "1d", 240)
+	if err != nil {
+		t.Fatalf("GetKLineDataWithRequest() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Close != stale[0].Close {
+		t.Fatalf("GetKLineDataWithRequest() = %#v, want stale cache %#v", got, stale)
+	}
+}
+
+func TestFetchKLineDataRetriesEastmoneyOnceAfterEOF(t *testing.T) {
+	eastmoneyCalls := 0
+	ms := &MarketService{
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				switch {
+				case strings.Contains(req.URL.Host, "quotes.sina.cn"):
+					return &http.Response{
+						StatusCode: 456,
+						Status:     "456 blocked",
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(`<!doctype html><html><body><h1>拒绝访问</h1></body></html>`)),
+						Request:    req,
+					}, nil
+				case strings.Contains(req.URL.Host, "push2his.eastmoney.com"):
+					eastmoneyCalls++
+					if eastmoneyCalls == 1 {
+						return nil, &url.Error{Op: "Get", URL: req.URL.String(), Err: io.EOF}
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: io.NopCloser(strings.NewReader(
+							`{"rc":0,"data":{"code":"002263","name":"大东南","klines":["2026-03-17,10.00,10.50,10.80,9.90,12345,543210.00,0,0,0,0"]}}`,
+						)),
+						Request: req,
+					}, nil
+				default:
+					return nil, fmt.Errorf("unexpected request: %s", req.URL.String())
+				}
+			}),
+		},
+	}
+
+	got, err := ms.fetchKLineData("sz002263", "1d", 240)
+	if err != nil {
+		t.Fatalf("fetchKLineData() error = %v", err)
+	}
+	if eastmoneyCalls != 2 {
+		t.Fatalf("eastmoney calls = %d, want 2", eastmoneyCalls)
+	}
+	if len(got) != 1 || got[0].Close != 10.5 {
+		t.Fatalf("fetchKLineData() = %#v", got)
+	}
+}
+
+func TestFetchKLineDataRetriesEastmoneyTwiceForDailyAfterEOF(t *testing.T) {
+	eastmoneyCalls := 0
+	ms := &MarketService{
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				switch {
+				case strings.Contains(req.URL.Host, "quotes.sina.cn"):
+					return &http.Response{
+						StatusCode: 456,
+						Status:     "456 blocked",
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(`<!doctype html><html><body><h1>拒绝访问</h1></body></html>`)),
+						Request:    req,
+					}, nil
+				case strings.Contains(req.URL.Host, "push2his.eastmoney.com"):
+					eastmoneyCalls++
+					if eastmoneyCalls < 3 {
+						return nil, &url.Error{Op: "Get", URL: req.URL.String(), Err: io.EOF}
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: io.NopCloser(strings.NewReader(
+							`{"rc":0,"data":{"code":"600955","name":"维远股份","klines":["2026-03-17,18.00,18.50,18.80,17.90,12345,543210.00,0,0,0,0"]}}`,
+						)),
+						Request: req,
+					}, nil
+				default:
+					return nil, fmt.Errorf("unexpected request: %s", req.URL.String())
+				}
+			}),
+		},
+	}
+
+	got, err := ms.fetchKLineData("sh600955", "1d", 240)
+	if err != nil {
+		t.Fatalf("fetchKLineData() error = %v", err)
+	}
+	if eastmoneyCalls != 3 {
+		t.Fatalf("eastmoney calls = %d, want 3", eastmoneyCalls)
+	}
+	if len(got) != 1 || got[0].Close != 18.5 {
+		t.Fatalf("fetchKLineData() = %#v", got)
+	}
+}
+
+func TestGetKLineDataUsesExtendedStaleCacheWindowForDaily(t *testing.T) {
+	stale := []models.KLineData{{Time: "2026-03-18", Close: 12.3}}
+	requestCount := 0
+	ms := &MarketService{
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				requestCount++
+				return nil, fmt.Errorf("synthetic upstream failure: %s", req.URL.String())
+			}),
+		},
+		klineCache: map[string]*klineCache{
+			"sz002263:1d:240": {
+				data:      stale,
+				timestamp: time.Now().Add(-2 * time.Hour),
+				ttl:       30 * time.Second,
+			},
+		},
+		klineCacheTTL: 30 * time.Second,
+	}
+
+	got, err := ms.GetKLineDataWithRequest("kline-extended-stale-1", "sz002263", "1d", 240)
+	if err != nil {
+		t.Fatalf("GetKLineDataWithRequest() error = %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("remote request count = %d, want 1", requestCount)
+	}
+	if len(got) != 1 || got[0].Close != stale[0].Close {
+		t.Fatalf("GetKLineDataWithRequest() = %#v, want stale cache %#v", got, stale)
+	}
+}
+
+func TestGetKLineDataSkipsRemoteFetchDuringDailyCooldownWhenStaleCacheExists(t *testing.T) {
+	stale := []models.KLineData{{Time: "2026-03-18", Close: 9.9}}
+	requestCount := 0
+	ms := &MarketService{
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				requestCount++
+				return nil, fmt.Errorf("unexpected remote request: %s", req.URL.String())
+			}),
+		},
+		klineCache: map[string]*klineCache{
+			"sz002455:1d:240": {
+				data:      stale,
+				timestamp: time.Now().Add(-2 * time.Minute),
+				ttl:       30 * time.Second,
+			},
+		},
+		klineCacheTTL: 30 * time.Second,
+	}
+
+	ms.noteKLineFetchFailure("sz002455", "1d", 240, errors.New("synthetic upstream failure"))
+
+	got, err := ms.GetKLineDataWithRequest("kline-cooldown-1", "sz002455", "1d", 240)
+	if err != nil {
+		t.Fatalf("GetKLineDataWithRequest() error = %v", err)
+	}
+	if requestCount != 0 {
+		t.Fatalf("remote request count = %d, want 0", requestCount)
+	}
+	if len(got) != 1 || got[0].Close != stale[0].Close {
+		t.Fatalf("GetKLineDataWithRequest() = %#v, want stale cache %#v", got, stale)
 	}
 }
 

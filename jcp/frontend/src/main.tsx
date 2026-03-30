@@ -2,6 +2,7 @@ import React from 'react'
 import {createRoot} from 'react-dom/client'
 import './style.css'
 import App from './App'
+import { ToastProvider } from './components/Toast'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { CandleColorProvider } from './contexts/CandleColorContext'
 import { IndicatorProvider } from './contexts/IndicatorContext'
@@ -15,7 +16,9 @@ root.render(
         <ThemeProvider>
             <CandleColorProvider>
                 <IndicatorProvider>
-                    <App/>
+                    <ToastProvider>
+                        <App/>
+                    </ToastProvider>
                 </IndicatorProvider>
             </CandleColorProvider>
         </ThemeProvider>

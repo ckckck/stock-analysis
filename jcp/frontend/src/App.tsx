@@ -10,6 +10,7 @@ import { LongHuBangDialog } from './components/LongHuBangDialog';
 import { ScreeningResultList } from './components/ScreeningResultList';
 import { ScreeningWorkspace } from './components/ScreeningWorkspace';
 import { WelcomePage } from './components/WelcomePage';
+import { useToast } from './components/Toast';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { useTheme } from './contexts/ThemeContext';
 import { useCandleColor } from './contexts/CandleColorContext';
@@ -57,6 +58,7 @@ import { canReuseHistorySql as shouldReuseHistorySql, canShowHistoryRerunLabel }
 import { resolveHistorySelectionAfterDelete } from './utils/screeningHistoryDelete';
 import { resolveStartupWindowRestore } from './utils/windowLayout';
 import { debugAppEvent, errorAppEvent, infoAppEvent, warnAppEvent } from './utils/appLog';
+import { shouldShowKlineRateLimitToast } from './utils/klineFallback';
 import {
   AppScreenMode,
   Stock,
@@ -147,6 +149,7 @@ const buildScreeningHistoryReuseBaseline = (response: ScreeningQueryResponse): S
 const App: React.FC = () => {
   const { colors } = useTheme();
   const cc = useCandleColor();
+  const { showToast } = useToast();
   const [watchlist, setWatchlist] = useState<Stock[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState<string>('');
   const [currentSession, setCurrentSession] = useState<StockSession | null>(null);
@@ -201,6 +204,7 @@ const App: React.FC = () => {
   const [screeningSQLTimeoutLabel, setScreeningSQLTimeoutLabel] = useState('不限');
   const [settingsInitialTab, setSettingsInitialTab] = useState<'provider' | 'screening'>('provider');
   const klineRequestIdRef = useRef(0);
+  const klineHistoryAvailabilityRef = useRef<Map<string, boolean>>(new Map());
   const screeningCancelRequestedRef = useRef(false);
 
   // 使用纯前端市场状态判断
@@ -1516,6 +1520,7 @@ const App: React.FC = () => {
           if (Array.isArray(data) && data.length > 0) {
             setKLineUpdateMode('full');
             setKLineData(data);
+            klineHistoryAvailabilityRef.current.set(selectedSymbol, true);
             debugAppEvent('kline', 'frontend request success', {
               module: 'market',
               action: 'kline.success',
@@ -1565,6 +1570,12 @@ const App: React.FC = () => {
         requestId,
         attempt: maxRetries + 1,
       });
+      if (shouldShowKlineRateLimitToast({
+        retriesExhausted: true,
+        hasAnyCachedData: klineHistoryAvailabilityRef.current.get(selectedSymbol) === true,
+      })) {
+        showToast('error', '当前请求速度太快，触发了平台的风控限制，请稍后再试。', 3000);
+      }
     };
 
     void loadKLineData();
