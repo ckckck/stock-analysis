@@ -9,6 +9,7 @@
    - 桌面窗口能打开且未崩溃；窗口由 `jcp/main.go:33` 配置。
    - `startup()` 已启动市场推送；对应逻辑见 `jcp/app.go:211`。
    - 设置页可读取和保存配置；配置接口起点见 `jcp/app.go:243`、`jcp/app.go:248`。
+5. 若要排查“启动是否最大化 / 前端是否覆盖了窗口状态”，优先看当日日志中的 `frontend: [window] startup layout restore evaluated`；其中 `isMaximized`、`restoreWindowSizeSkipped` 和 `restoreReason` 能直接说明启动时窗口状态判定与布局恢复决策。
 
 ## 验证 Windows 打包图标
 
@@ -25,6 +26,7 @@
 5. 验证方式：
    - `sessions/<stock>.json` 出现新增消息，见 `jcp/internal/services/session_service.go:92`、`jcp/internal/services/session_service.go:123`。
    - 若启用记忆，相关上下文会进入记忆管理器，见 `jcp/app.go:94`、`jcp/internal/memory/manager.go:101`。
+6. 若指定专家失败后点击“重试”，当天文件日志除了 `retry_agent.request` / `retry_agent.success` 外，还应出现 `frontend: [meeting] retry feedback resolved`，其中 `resolvedBy=latest|fallback|current` 会直接告诉你 UI 最终使用了哪一种消息来源做回填。
 
 ## 调整策略、专家或 AI 配置
 

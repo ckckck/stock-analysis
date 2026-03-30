@@ -166,12 +166,31 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class KLineRequest {
+	    code: string;
+	    period: string;
+	    days: number;
+	    requestId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new KLineRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.code = source["code"];
+	        this.period = source["period"];
+	        this.days = source["days"];
+	        this.requestId = source["requestId"];
+	    }
+	}
 	export class MeetingMessageRequest {
 	    stockCode: string;
 	    content: string;
 	    mentionIds: string[];
 	    replyToId: string;
 	    replyContent: string;
+	    requestId: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MeetingMessageRequest(source);
@@ -184,6 +203,35 @@ export namespace main {
 	        this.mentionIds = source["mentionIds"];
 	        this.replyToId = source["replyToId"];
 	        this.replyContent = source["replyContent"];
+	        this.requestId = source["requestId"];
+	    }
+	}
+	export class OrderBookRequest {
+	    code: string;
+	    requestId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OrderBookRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.code = source["code"];
+	        this.requestId = source["requestId"];
+	    }
+	}
+	export class StockRealTimeRequest {
+	    codes: string[];
+	    requestId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StockRealTimeRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.codes = source["codes"];
+	        this.requestId = source["requestId"];
 	    }
 	}
 
@@ -536,6 +584,20 @@ export namespace models {
 	        this.windowHeight = source["windowHeight"];
 	    }
 	}
+	export class LoggingConfig {
+	    globalLevel: string;
+	    moduleLevels: Record<string, string>;
+	
+	    static createFrom(source: any = {}) {
+	        return new LoggingConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.globalLevel = source["globalLevel"];
+	        this.moduleLevels = source["moduleLevels"];
+	    }
+	}
 	export class ProxyConfig {
 	    mode: string;
 	    customUrl: string;
@@ -608,6 +670,7 @@ export namespace models {
 	    mcpServers: MCPServerConfig[];
 	    memory: MemoryConfig;
 	    proxy: ProxyConfig;
+	    logging: LoggingConfig;
 	    layout: LayoutConfig;
 	    openClaw: OpenClawConfig;
 	    indicators: IndicatorConfig;
@@ -628,6 +691,7 @@ export namespace models {
 	        this.mcpServers = this.convertValues(source["mcpServers"], MCPServerConfig);
 	        this.memory = this.convertValues(source["memory"], MemoryConfig);
 	        this.proxy = this.convertValues(source["proxy"], ProxyConfig);
+	        this.logging = this.convertValues(source["logging"], LoggingConfig);
 	        this.layout = this.convertValues(source["layout"], LayoutConfig);
 	        this.openClaw = this.convertValues(source["openClaw"], OpenClawConfig);
 	        this.indicators = this.convertValues(source["indicators"], IndicatorConfig);
@@ -722,6 +786,7 @@ export namespace models {
 	        this.ma20 = source["ma20"];
 	    }
 	}
+	
 	
 	export class LongHuBangDetail {
 	    rank: number;

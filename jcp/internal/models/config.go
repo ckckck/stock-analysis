@@ -64,10 +64,17 @@ type AppConfig struct {
 	MCPServers      []MCPServerConfig `json:"mcpServers"`    // MCP服务器配置列表
 	Memory          MemoryConfig      `json:"memory"`        // 记忆管理配置
 	Proxy           ProxyConfig       `json:"proxy"`         // 代理配置
+	Logging         LoggingConfig     `json:"logging"`       // 日志配置
 	Layout          LayoutConfig      `json:"layout"`        // 界面布局配置
 	OpenClaw        OpenClawConfig    `json:"openClaw"`      // OpenClaw 服务配置
 	Indicators      IndicatorConfig   `json:"indicators"`    // 技术指标配置
 	Screening       ScreeningConfig   `json:"screening"`     // AI筛选配置
+}
+
+// LoggingConfig 日志配置
+type LoggingConfig struct {
+	GlobalLevel  string            `json:"globalLevel"`
+	ModuleLevels map[string]string `json:"moduleLevels"`
 }
 
 // ProxyMode 代理模式

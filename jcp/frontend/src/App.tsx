@@ -55,7 +55,8 @@ import {
 } from './utils/screeningSync';
 import { canReuseHistorySql as shouldReuseHistorySql, canShowHistoryRerunLabel } from './utils/screeningHistoryReuse';
 import { resolveHistorySelectionAfterDelete } from './utils/screeningHistoryDelete';
-import { debugAppEvent } from './utils/appLog';
+import { resolveStartupWindowRestore } from './utils/windowLayout';
+import { debugAppEvent, errorAppEvent, infoAppEvent, warnAppEvent } from './utils/appLog';
 import {
   AppScreenMode,
   Stock,
@@ -105,6 +106,13 @@ type SyncHealthTone = 'success' | 'warning' | 'danger';
 const isScreeningSyncTerminal = (runStatus?: string): boolean => (
   Boolean(runStatus && SCREENING_SYNC_TERMINAL_STATUSES.has(runStatus))
 );
+
+const toErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+};
 
 interface ScreeningHistoryReuseBaseline {
   prompt: string;
@@ -1408,9 +1416,24 @@ const App: React.FC = () => {
               ),
             );
           }
-          // 恢复窗口大小
-          if (appConfig.layout.windowWidth > 0 && appConfig.layout.windowHeight > 0) {
-            WindowSetSize(appConfig.layout.windowWidth, appConfig.layout.windowHeight);
+          const maximized = await WindowIsMaximised().catch(() => false);
+          setIsMaximized(maximized);
+          const restoreDecision = resolveStartupWindowRestore(
+            appConfig.layout.windowWidth,
+            appConfig.layout.windowHeight,
+            maximized,
+          );
+          infoAppEvent('window', 'startup layout restore evaluated', {
+            module: 'window',
+            action: 'startup.restore_layout',
+            isMaximized: maximized,
+            restoreWindowSizeSkipped: !restoreDecision.shouldRestore,
+            restoreReason: restoreDecision.reason,
+            savedWindowWidth: restoreDecision.savedWindowWidth,
+            savedWindowHeight: restoreDecision.savedWindowHeight,
+          });
+          if (restoreDecision.shouldRestore) {
+            WindowSetSize(restoreDecision.savedWindowWidth, restoreDecision.savedWindowHeight);
           }
         }
 
@@ -1454,36 +1477,94 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!selectedSymbol) return;
     const requestId = ++klineRequestIdRef.current;
+    const dataLen = timePeriod === '1m' ? 250 : 240;
+    const maxRetries = 2;
     // 切换时先切回 full 模式，等待全量数据到达
     setKLineUpdateMode('full');
     // 清空旧数据，避免切换期间出现“新股票 + 旧K线”错配
     setKLineData([]);
     // 订阅K线推送
     subscribeKLine(selectedSymbol, timePeriod);
+    debugAppEvent('kline', 'frontend request scheduled', {
+      module: 'market',
+      action: 'kline.request',
+      symbol: selectedSymbol,
+      period: timePeriod,
+      days: dataLen,
+      requestId,
+      attempt: 1,
+    });
 
     const loadKLineData = async () => {
-      // 与后端推送统一数据长度，降低周/月K空响应概率
-      const dataLen = timePeriod === '1m' ? 250 : 240;
-      const maxRetries = 2;
       for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
         if (requestId !== klineRequestIdRef.current) return;
+        const attemptIndex = attempt + 1;
         try {
-          const data = await getKLineData(selectedSymbol, timePeriod, dataLen);
+          debugAppEvent('kline', 'frontend request start', {
+            module: 'market',
+            action: 'kline.request',
+            symbol: selectedSymbol,
+            period: timePeriod,
+            days: dataLen,
+            requestId,
+            attempt: attemptIndex,
+          });
+          const data = await getKLineData(selectedSymbol, timePeriod, dataLen, {
+            requestId: `kline-${requestId}`,
+          });
           if (requestId !== klineRequestIdRef.current) return;
           if (Array.isArray(data) && data.length > 0) {
             setKLineUpdateMode('full');
             setKLineData(data);
+            debugAppEvent('kline', 'frontend request success', {
+              module: 'market',
+              action: 'kline.success',
+              symbol: selectedSymbol,
+              period: timePeriod,
+              days: dataLen,
+              requestId,
+              attempt: attemptIndex,
+              resultLen: data.length,
+            });
             return;
           }
-          console.warn(`[kline] empty data for ${selectedSymbol} ${timePeriod}, attempt=${attempt + 1}`);
+          warnAppEvent('kline', 'frontend empty response', {
+            module: 'market',
+            action: 'kline.empty',
+            symbol: selectedSymbol,
+            period: timePeriod,
+            days: dataLen,
+            requestId,
+            attempt: attemptIndex,
+            resultLen: Array.isArray(data) ? data.length : 0,
+          });
         } catch (err) {
           if (requestId !== klineRequestIdRef.current) return;
-          console.error(`[kline] load failed for ${selectedSymbol} ${timePeriod}, attempt=${attempt + 1}`, err);
+          errorAppEvent('kline', 'frontend request failed', {
+            module: 'market',
+            action: 'kline.failed',
+            symbol: selectedSymbol,
+            period: timePeriod,
+            days: dataLen,
+            requestId,
+            attempt: attemptIndex,
+            err: toErrorMessage(err),
+          });
         }
         if (attempt < maxRetries) {
           await new Promise(resolve => setTimeout(resolve, 600));
         }
       }
+      if (requestId !== klineRequestIdRef.current) return;
+      warnAppEvent('kline', 'frontend retries exhausted', {
+        module: 'market',
+        action: 'kline.retries_exhausted',
+        symbol: selectedSymbol,
+        period: timePeriod,
+        days: dataLen,
+        requestId,
+        attempt: maxRetries + 1,
+      });
     };
 
     void loadKLineData();

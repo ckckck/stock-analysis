@@ -26,6 +26,14 @@ import (
 
 var log = logger.New("market")
 
+func requestIDField(requestID string) string {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return ""
+	}
+	return fmt.Sprintf(" requestId=%s", requestID)
+}
+
 // 预编译正则表达式，避免重复编译
 var (
 	sinaStockRegex = regexp.MustCompile(`var hq_str_(\w+)="([^"]*)"`)
@@ -218,15 +226,18 @@ func (ms *MarketService) GetStockDataWithOrderBook(codes ...string) ([]StockWith
 func (ms *MarketService) fetchStockDataWithOrderBook(codes ...string) ([]StockWithOrderBook, error) {
 	codeList := strings.Join(codes, ",")
 	url := fmt.Sprintf(sinaStockURL, time.Now().UnixNano(), codeList)
+	startedAt := time.Now()
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
+		log.Warn("module=market action=orderbook.fetch.request_failed codes=%d durationMs=%d err=%v", len(codes), time.Since(startedAt).Milliseconds(), err)
 		return nil, err
 	}
 	req.Header.Set("Referer", "http://finance.sina.com.cn")
 
 	resp, err := ms.client.Do(req)
 	if err != nil {
+		log.Warn("module=market action=orderbook.fetch.http_failed codes=%d durationMs=%d err=%v", len(codes), time.Since(startedAt).Milliseconds(), err)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -234,6 +245,12 @@ func (ms *MarketService) fetchStockDataWithOrderBook(codes ...string) ([]StockWi
 	reader := transform.NewReader(resp.Body, simplifiedchinese.GBK.NewDecoder())
 	body, err := io.ReadAll(reader)
 	if err != nil {
+		log.Warn("module=market action=orderbook.fetch.read_failed codes=%d durationMs=%d err=%v", len(codes), time.Since(startedAt).Milliseconds(), err)
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		err = fmt.Errorf("orderbook api status %d for %s: %s", resp.StatusCode, codeList, httpErrorPreview(body))
+		log.Warn("module=market action=orderbook.fetch.http_status_failed codes=%d durationMs=%d err=%v", len(codes), time.Since(startedAt).Milliseconds(), err)
 		return nil, err
 	}
 
@@ -264,18 +281,22 @@ func (ms *MarketService) GetStockRealTimeData(codes ...string) ([]models.Stock, 
 	if len(codes) == 0 {
 		return nil, nil
 	}
+	startedAt := time.Now()
+	log.Info("module=market action=realtime.fetch.start codes=%d symbols=%s", len(codes), strings.Join(codes, ","))
 
 	codeList := strings.Join(codes, ",")
 	url := fmt.Sprintf(sinaStockURL, time.Now().UnixNano(), codeList)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
+		log.Warn("module=market action=realtime.fetch.request_failed codes=%d durationMs=%d err=%v", len(codes), time.Since(startedAt).Milliseconds(), err)
 		return nil, err
 	}
 	req.Header.Set("Referer", "http://finance.sina.com.cn")
 
 	resp, err := ms.client.Do(req)
 	if err != nil {
+		log.Warn("module=market action=realtime.fetch.http_failed codes=%d durationMs=%d err=%v", len(codes), time.Since(startedAt).Milliseconds(), err)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -283,10 +304,39 @@ func (ms *MarketService) GetStockRealTimeData(codes ...string) ([]models.Stock, 
 	reader := transform.NewReader(resp.Body, simplifiedchinese.GBK.NewDecoder())
 	body, err := io.ReadAll(reader)
 	if err != nil {
+		log.Warn("module=market action=realtime.fetch.read_failed codes=%d durationMs=%d err=%v", len(codes), time.Since(startedAt).Milliseconds(), err)
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		err = fmt.Errorf("realtime api status %d for %s: %s", resp.StatusCode, codeList, httpErrorPreview(body))
+		log.Warn("module=market action=realtime.fetch.http_status_failed codes=%d durationMs=%d err=%v", len(codes), time.Since(startedAt).Milliseconds(), err)
 		return nil, err
 	}
 
-	return ms.parseSinaStockData(string(body), codes)
+	stocks, err := ms.parseSinaStockData(string(body), codes)
+	if err != nil {
+		log.Warn("module=market action=realtime.fetch.parse_failed codes=%d durationMs=%d err=%v", len(codes), time.Since(startedAt).Milliseconds(), err)
+		return nil, err
+	}
+	log.Info("module=market action=realtime.fetch.success codes=%d resultLen=%d durationMs=%d", len(codes), len(stocks), time.Since(startedAt).Milliseconds())
+	return stocks, nil
+}
+
+// GetStockRealTimeDataWithRequest 获取股票实时数据（带 requestId）
+func (ms *MarketService) GetStockRealTimeDataWithRequest(requestID string, codes ...string) ([]models.Stock, error) {
+	requestField := requestIDField(requestID)
+	if len(codes) == 0 {
+		return nil, nil
+	}
+	startedAt := time.Now()
+	log.Info("module=market action=realtime.fetch.start%s codes=%d symbols=%s", requestField, len(codes), strings.Join(codes, ","))
+	stocks, err := ms.GetStockRealTimeData(codes...)
+	if err != nil {
+		log.Warn("module=market action=realtime.fetch.failed%s codes=%d symbols=%s durationMs=%d err=%v", requestField, len(codes), strings.Join(codes, ","), time.Since(startedAt).Milliseconds(), err)
+		return nil, err
+	}
+	log.Info("module=market action=realtime.fetch.success%s codes=%d resultLen=%d durationMs=%d", requestField, len(codes), len(stocks), time.Since(startedAt).Milliseconds())
+	return stocks, nil
 }
 
 // parseSinaStockData 解析新浪股票数据
@@ -437,10 +487,12 @@ func (ms *MarketService) GetKLineData(code string, period string, days int) ([]m
 		}
 	}
 	ms.klineCacheMu.RUnlock()
+	log.Info("module=market action=kline.fetch.start symbol=%s period=%s days=%d", code, period, days)
 
 	// 从API获取数据
 	klines, err := ms.fetchKLineData(code, period, days)
 	if err != nil {
+		log.Warn("module=market action=kline.fetch.failed symbol=%s period=%s days=%d err=%v", code, period, days, err)
 		return nil, err
 	}
 
@@ -452,7 +504,22 @@ func (ms *MarketService) GetKLineData(code string, period string, days int) ([]m
 		ttl:       ttl,
 	}
 	ms.klineCacheMu.Unlock()
+	log.Info("module=market action=kline.fetch.success symbol=%s period=%s days=%d resultLen=%d", code, period, days, len(klines))
 
+	return klines, nil
+}
+
+// GetKLineDataWithRequest 获取K线数据（带 requestId）
+func (ms *MarketService) GetKLineDataWithRequest(requestID string, code string, period string, days int) ([]models.KLineData, error) {
+	requestField := requestIDField(requestID)
+	startedAt := time.Now()
+	log.Info("module=market action=kline.fetch.start%s symbol=%s period=%s days=%d", requestField, code, period, days)
+	klines, err := ms.GetKLineData(code, period, days)
+	if err != nil {
+		log.Warn("module=market action=kline.fetch.failed%s symbol=%s period=%s days=%d durationMs=%d err=%v", requestField, code, period, days, time.Since(startedAt).Milliseconds(), err)
+		return nil, err
+	}
+	log.Info("module=market action=kline.fetch.success%s symbol=%s period=%s days=%d resultLen=%d durationMs=%d", requestField, code, period, days, len(klines), time.Since(startedAt).Milliseconds())
 	return klines, nil
 }
 
@@ -599,28 +666,34 @@ func (ms *MarketService) GetScreeningSnapshots(symbols []string) ([]models.Stock
 func (ms *MarketService) fetchKLineData(code string, period string, days int) ([]models.KLineData, error) {
 	scale := ms.periodToScale(period)
 	url := fmt.Sprintf(sinaKLineURL, code, scale, days)
+	startedAt := time.Now()
 
 	resp, err := ms.client.Get(url)
 	if err != nil {
+		log.Warn("module=market action=kline.fetch.http_failed symbol=%s period=%s days=%d durationMs=%d err=%v", code, period, days, time.Since(startedAt).Milliseconds(), err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		log.Warn("module=market action=kline.fetch.read_failed symbol=%s period=%s days=%d durationMs=%d err=%v", code, period, days, time.Since(startedAt).Milliseconds(), err)
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf(
+		err = fmt.Errorf(
 			"kline api status %d for %s: %s",
 			resp.StatusCode,
 			code,
 			httpErrorPreview(body),
 		)
+		log.Warn("module=market action=kline.fetch.http_status_failed symbol=%s period=%s days=%d durationMs=%d err=%v", code, period, days, time.Since(startedAt).Milliseconds(), err)
+		return nil, err
 	}
 
 	klines, err := ms.parseKLineData(string(body))
 	if err != nil {
+		log.Warn("module=market action=kline.fetch.parse_failed symbol=%s period=%s days=%d durationMs=%d err=%v", code, period, days, time.Since(startedAt).Milliseconds(), err)
 		return nil, err
 	}
 
@@ -629,6 +702,7 @@ func (ms *MarketService) fetchKLineData(code string, period string, days int) ([
 		klines = ms.filterTodayKLines(klines)
 		klines = ms.calculateAvgLine(klines)
 	}
+	log.Debug("module=market action=kline.fetch.loaded symbol=%s period=%s days=%d resultLen=%d durationMs=%d", code, period, days, len(klines), time.Since(startedAt).Milliseconds())
 
 	return klines, nil
 }
@@ -799,11 +873,34 @@ func (ms *MarketService) parseKLineData(data string) ([]models.KLineData, error)
 
 // GetRealOrderBook 获取真实盘口数据
 func (ms *MarketService) GetRealOrderBook(code string) (models.OrderBook, error) {
+	startedAt := time.Now()
+	log.Info("module=market action=orderbook.fetch.start symbol=%s", code)
 	data, err := ms.GetStockDataWithOrderBook(code)
-	if err != nil || len(data) == 0 {
+	if err != nil {
+		log.Warn("module=market action=orderbook.fetch.failed symbol=%s durationMs=%d err=%v", code, time.Since(startedAt).Milliseconds(), err)
 		return models.OrderBook{}, err
 	}
-	return data[0].OrderBook, nil
+	if len(data) == 0 {
+		log.Warn("module=market action=orderbook.fetch.empty symbol=%s durationMs=%d", code, time.Since(startedAt).Milliseconds())
+		return models.OrderBook{}, err
+	}
+	orderBook := data[0].OrderBook
+	log.Info("module=market action=orderbook.fetch.success symbol=%s bids=%d asks=%d durationMs=%d", code, len(orderBook.Bids), len(orderBook.Asks), time.Since(startedAt).Milliseconds())
+	return orderBook, nil
+}
+
+// GetRealOrderBookWithRequest 获取真实盘口数据（带 requestId）
+func (ms *MarketService) GetRealOrderBookWithRequest(requestID string, code string) (models.OrderBook, error) {
+	requestField := requestIDField(requestID)
+	startedAt := time.Now()
+	log.Info("module=market action=orderbook.fetch.start%s symbol=%s", requestField, code)
+	orderBook, err := ms.GetRealOrderBook(code)
+	if err != nil {
+		log.Warn("module=market action=orderbook.fetch.failed%s symbol=%s durationMs=%d err=%v", requestField, code, time.Since(startedAt).Milliseconds(), err)
+		return models.OrderBook{}, err
+	}
+	log.Info("module=market action=orderbook.fetch.success%s symbol=%s bids=%d asks=%d durationMs=%d", requestField, code, len(orderBook.Bids), len(orderBook.Asks), time.Since(startedAt).Milliseconds())
+	return orderBook, nil
 }
 
 // GenerateOrderBook 生成盘口数据（保留兼容，建议使用 GetRealOrderBook）

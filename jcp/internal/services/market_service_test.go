@@ -4,10 +4,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/run-bigpig/jcp/internal/logger"
 	"github.com/run-bigpig/jcp/internal/models"
 )
 
@@ -44,6 +47,189 @@ func TestFetchKLineDataReturnsHTTPStatusErrorBeforeJSONParsing(t *testing.T) {
 	}
 	if strings.Contains(got, "invalid character '<'") {
 		t.Fatalf("fetchKLineData() error = %q, should not expose raw json parse error", got)
+	}
+}
+
+func TestGetStockRealTimeDataReturnsHTTPStatusErrorBeforeParsing(t *testing.T) {
+	ms := &MarketService{
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: 503,
+					Status:     "503 service unavailable",
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`temporarily blocked`)),
+					Request:    req,
+				}, nil
+			}),
+		},
+	}
+
+	_, err := ms.GetStockRealTimeData("sh600000")
+	if err == nil {
+		t.Fatalf("GetStockRealTimeData() error = nil, want status error")
+	}
+
+	got := err.Error()
+	if !strings.Contains(got, "realtime api status 503") {
+		t.Fatalf("GetStockRealTimeData() error = %q, want status code context", got)
+	}
+}
+
+func TestGetRealOrderBookReturnsHTTPStatusErrorBeforeParsing(t *testing.T) {
+	ms := &MarketService{
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: 502,
+					Status:     "502 bad gateway",
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`gateway timeout`)),
+					Request:    req,
+				}, nil
+			}),
+		},
+		cache:      make(map[string]*stockCache),
+		cacheTTL:   2 * time.Second,
+		klineCache: make(map[string]*klineCache),
+	}
+
+	_, err := ms.GetRealOrderBook("sz000001")
+	if err == nil {
+		t.Fatalf("GetRealOrderBook() error = nil, want status error")
+	}
+
+	got := err.Error()
+	if !strings.Contains(got, "orderbook api status 502") {
+		t.Fatalf("GetRealOrderBook() error = %q, want status code context", got)
+	}
+}
+
+func TestGetKLineDataWithRequestLogsRequestID(t *testing.T) {
+	t.Cleanup(func() {
+		logger.Close()
+		logger.SetGlobalLevel(logger.INFO)
+		logger.SetConsoleOutput(true)
+	})
+
+	logger.SetConsoleOutput(false)
+	logger.SetGlobalLevel(logger.DEBUG)
+	logDir := t.TempDir()
+	if err := logger.InitFileLogger(logDir); err != nil {
+		t.Fatalf("InitFileLogger() error = %v", err)
+	}
+
+	ms := &MarketService{
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(
+						`[{"day":"2026-03-18","open":"3.040","high":"3.090","low":"3.030","close":"3.070","volume":"10966540"}]`,
+					)),
+					Request: req,
+				}, nil
+			}),
+		},
+		klineCache:    make(map[string]*klineCache),
+		klineCacheTTL: 30 * time.Second,
+	}
+
+	_, err := ms.GetKLineDataWithRequest("kline-7", "sz000541", "1d", 30)
+	if err != nil {
+		t.Fatalf("GetKLineDataWithRequest() error = %v", err)
+	}
+
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "requestId=kline-7") {
+		t.Fatalf("log file = %q, want requestId", text)
+	}
+}
+
+func TestMarketSummaryLogsRemainVisibleAtInfoLevel(t *testing.T) {
+	t.Cleanup(func() {
+		logger.Close()
+		logger.SetGlobalLevel(logger.INFO)
+		logger.SetConsoleOutput(true)
+	})
+
+	logger.SetConsoleOutput(false)
+	logger.SetGlobalLevel(logger.INFO)
+	logDir := t.TempDir()
+	if err := logger.InitFileLogger(logDir); err != nil {
+		t.Fatalf("InitFileLogger() error = %v", err)
+	}
+
+	ms := &MarketService{
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				switch {
+				case strings.Contains(req.URL.String(), "CN_MarketDataService.getKLineData"):
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: io.NopCloser(strings.NewReader(
+							`[{"day":"2026-03-18","open":"3.040","high":"3.090","low":"3.030","close":"3.070","volume":"10966540"}]`,
+						)),
+						Request: req,
+					}, nil
+				default:
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body: io.NopCloser(strings.NewReader(
+							`var hq_str_sz000001="平安银行,10.00,9.90,10.10,10.20,9.80,10.09,10.10,10000,200000,100,10.09,200,10.08,300,10.07,400,10.06,500,10.05,100,10.10,200,10.11,300,10.12,400,10.13,500,10.14,2026-03-30,15:00:00";`,
+						)),
+						Request: req,
+					}, nil
+				}
+			}),
+		},
+		cache:         make(map[string]*stockCache),
+		cacheTTL:      2 * time.Second,
+		klineCache:    make(map[string]*klineCache),
+		klineCacheTTL: 30 * time.Second,
+	}
+
+	if _, err := ms.GetStockRealTimeDataWithRequest("realtime-1", "sz000001"); err != nil {
+		t.Fatalf("GetStockRealTimeDataWithRequest() error = %v", err)
+	}
+	if _, err := ms.GetKLineDataWithRequest("kline-1", "sz000001", "1d", 30); err != nil {
+		t.Fatalf("GetKLineDataWithRequest() error = %v", err)
+	}
+
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	for _, want := range []string{
+		"module=market action=realtime.fetch.start requestId=realtime-1",
+		"module=market action=realtime.fetch.success requestId=realtime-1",
+		"module=market action=kline.fetch.start requestId=kline-1",
+		"module=market action=kline.fetch.success requestId=kline-1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("log file = %q, want %q", text, want)
+		}
 	}
 }
 
