@@ -51,3 +51,6 @@
 - 历史筛选记录保存的是执行时的 SQL、作用域和结果快照；回放历史读取快照，不重新请求模型，也不重新跑 SQL。若用户从历史记录再次执行，是否复用 SQL 由“提示词、市场范围、结果模式、结果条数、测试范围”共同决定；只要任一项变化，就重新请求模型生成 SQL，见 `jcp/internal/services/screening_store.go:121`、`jcp/internal/services/screening_query_service.go:217`、`jcp/frontend/src/utils/screeningHistoryReuse.ts:1`。
 - 历史筛选记录支持显式删除；删除入口走前端确认弹框，后端删除 `screening_runs` 主记录后依赖外键级联清理结果快照，见 `jcp/frontend/src/App.tsx`、`jcp/internal/services/screening_store.go:599`。
 - 当前环境里若 `wails` CLI 不可用，前后端新增绑定需要手工同步 `jcp/frontend/wailsjs/go/main/App.d.ts` 与 `jcp/frontend/wailsjs/go/main/App.js`，避免只改 Go 导致前端调用缺失。
+- 统一日志当前采用“失败详细、成功摘要”的文本日志约定，核心现场链路至少要能在默认 `INFO` 下看到请求发出、桥接收到、服务执行结果与错误原因。
+- 前端桥接日志默认通过 `jcp/frontend/src/utils/appLog.ts` 进入 Go 侧 `frontend` logger；若某类前端摘要必须稳定出现在现场日志里，应优先使用 `infoAppEvent()`，避免只落 `debug` 导致现场缺证据。
+- 会议室失败重试链路的关键排障关键词是 `retry_agent.request`、`retry_agent.success` 与 `frontend: [meeting] retry feedback resolved`；启动窗口恢复链路的关键关键词是 `frontend: [window] startup layout restore evaluated`。

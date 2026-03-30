@@ -9,6 +9,7 @@
 - 桌面入口：Wails 使用嵌入的 `frontend/dist` 资源启动桌面窗口，并把 `App` 作为前后端桥接对象绑定到运行时，见 `jcp/main.go:15`、`jcp/main.go:33`、`jcp/main.go:48`。
 - 后端编排层：`App` 聚合配置、行情、AI 筛选存储/同步/调度/查询、新闻、热点、龙虎榜、策略、会话、会议、MCP、记忆、更新和 OpenClaw 服务，是系统主装配点，见 `jcp/app.go:73`、`jcp/app.go:129`、`jcp/app.go:137`、`jcp/app.go:139`、`jcp/app.go:237`。
 - 前端应用层：`frontend/src/App.tsx` 组织首页/自选/AI 筛选三态切换、筛选结果列表、筛选工作区、图表、盘口、会议室、设置和多个业务弹窗，并处理推送更新、统一筛选确认、历史结果双页签、历史删除确认和布局持久化，见 `jcp/frontend/src/App.tsx`。
+- 统一日志与现场排障层：前端通过 `appLog` 桥接文件日志，普通行情链路、会议入口、会议重试回填和启动窗口恢复都补齐了稳定摘要；Go 侧 `app` / `frontend` / `market` logger 共同承担 request/failed/success 证据链，见 `jcp/frontend/src/utils/appLog.ts`、`jcp/frontend/src/components/AgentRoom.tsx`、`jcp/frontend/src/services/sessionService.ts`、`jcp/app.go`、`jcp/internal/services/market_service.go`。
 - 设置页模型管理：`frontend/src/components/SettingsDialog.tsx` 中的 Provider 列表把“切换当前默认模型”和“进入编辑页”拆成两种交互，卡片点击只负责切换模型，右侧按钮区负责编辑、复制、设默认和删除。
 - 配置与落盘层：应用数据默认位于用户配置目录下的 `jcp` 子目录；配置、自选股、策略、会话仍通过本地 JSON 文件持久化，AI 筛选新增独立 SQLite 库 `screening/screening.db`，见 `jcp/internal/pkg/paths/paths.go:8`、`jcp/internal/pkg/paths/paths.go:22`、`jcp/internal/services/config_service.go:23`、`jcp/internal/services/session_service.go:23`、`jcp/internal/services/strategy_service.go:110`、`jcp/internal/services/screening_store.go:51`。
 - AI 筛选数据层：`ScreeningStore` 维护 `stocks_basic`、`daily_bars`、`daily_snapshots`、`sync_state`、`screening_runs`、`screening_run_results` 和视图 `v_stock_latest_daily`，供同步链与查询链共享，见 `jcp/internal/services/screening_store.go:81`、`jcp/internal/services/screening_store.go:121`、`jcp/internal/services/screening_store.go:131`、`jcp/internal/services/screening_store.go:150`。
@@ -29,7 +30,7 @@
 1. 前端维护选中股票、K 线、盘口和会话状态，并通过服务层调用后端绑定接口，见 `jcp/frontend/src/App.tsx:49`、`jcp/frontend/src/App.tsx:52`、`jcp/frontend/src/App.tsx:55`、`jcp/frontend/src/App.tsx:69`。
 2. 行情数据通过 `GetWatchlist`、`GetStockRealTimeData`、`GetKLineData`、`GetOrderBook` 等接口进入前端；市场服务对行情与 K 线做短期缓存，见 `jcp/app.go:335`、`jcp/app.go:396`、`jcp/app.go:402`、`jcp/app.go:408`、`jcp/internal/services/market_service.go:93`、`jcp/internal/services/market_service.go:108`。
 3. 用户发送问题后，`SendMeetingMessage` 根据场景进入智能模式或直接专家模式；响应再被保存进 Session 并通过 Wails 事件推送回前端，见 `jcp/app.go:783`、`jcp/app.go:846`、`jcp/app.go:900`、`jcp/app.go:925`、`jcp/app.go:943`。
-4. 若会议失败，可重试单专家或继续中断会议；中断状态在会议服务中有 TTL 缓存，见 `jcp/app.go:949`、`jcp/app.go:1007`、`jcp/internal/meeting/service.go:109`、`jcp/internal/meeting/service.go:125`。
+4. 若会议失败，可重试单专家或继续中断会议；前端重试成功后会主动拉取最新 Session 消息，并额外写入 `retry_feedback.resolved` 摘要，明确记录这次 UI 回填是来自最新消息、fallback 结果还是保持当前列表；中断状态在会议服务中有 TTL 缓存，见 `jcp/frontend/src/utils/meetingRetry.ts`、`jcp/frontend/src/components/AgentRoom.tsx`、`jcp/app.go:949`、`jcp/app.go:1007`、`jcp/internal/meeting/service.go:109`、`jcp/internal/meeting/service.go:125`。
 
 ### AI 筛选链
 
@@ -53,6 +54,7 @@
 - 记忆、Session 和策略按本地文件存储，AI 筛选单独落 SQLite；因此多机同步和冲突处理当前仍不在应用内解决，见 `jcp/internal/services/config_service.go:29`、`jcp/internal/services/session_service.go:26`、`jcp/internal/services/strategy_service.go:113`、`jcp/internal/services/screening_store.go:51`。
 - AI 筛选历史同时承担三种角色：一是“结果快照”回放，二是“历史 SQL 模板”重跑，三是可删除的历史索引。回放仍保留当时命中集合；重跑则直接基于保存的 `generated_sql` 和当前数据库重新生成一条新历史；删除会移除这条历史及其结果快照，因此三者语义不同，见 `jcp/internal/services/screening_store.go`、`jcp/internal/services/screening_query_service.go`。
 - AI 筛选同步与普通 K 线获取已分层：同步链路优先追求日线稳定性，因此单独走 `Baostock -> 新 Sina 日线接口`；普通图表与其它 K 线入口仍保留现有 `GetKLineData()` 行为，见 `jcp/internal/services/market_service.go:508`、`jcp/internal/services/screening_daily_bar_source.go:38`。
+- 桌面窗口启动时会先读取运行时最大化状态，再决定是否恢复持久化窗口尺寸，并把判定写入 `startup.restore_layout` 文件日志；因此现场可以区分“Wails 启动即最大化”与“后续按普通窗口尺寸恢复布局”这两种情况，见 `jcp/frontend/src/utils/windowLayout.ts`、`jcp/frontend/src/App.tsx`。
 - AI 筛选同步候选和本地筛选 universe 都会排除 `is_active = false` 的股票；另外，对于连续 3 次 `no new bars` 且源最新日期至少落后目标交易日 20 个交易日的 symbol，本地还会额外写入 `sync_symbol_states.excluded=1`，把它们从后续同步队列、覆盖率总数和筛选 universe 中移除。这样退市/终止上市或长期无新增日线的股票仍可保留历史数据，但不会再永久拖住“已同步/总数”状态，见 `jcp/internal/services/screening_sync_service.go`、`jcp/internal/services/screening_store.go`。
 - AI 筛选股票池里的深市创业板股票不再参与同步和筛选。`300`、`301` 开头的 `.SZ` 个股会在股票池构建阶段被过滤，但创业板指数仍可在启用“指数”范围时保留，见 `jcp/internal/services/market_service.go:632`、`jcp/internal/services/market_service_test.go:187`。
 - OpenClaw 复用同一套会议与专家体系，不是完全独立的分析引擎；它是在桌面应用上额外开出的 HTTP 面，见 `jcp/app.go:142`、`jcp/internal/openclaw/server.go:27`。

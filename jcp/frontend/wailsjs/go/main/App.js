@@ -106,6 +106,10 @@ export function GetKLineData(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetKLineData'](arg1, arg2, arg3);
 }
 
+export function GetKLineDataWithRequest(arg1) {
+  return window['go']['main']['App']['GetKLineDataWithRequest'](arg1);
+}
+
 export function GetLongHuBangDetail(arg1, arg2) {
   return window['go']['main']['App']['GetLongHuBangDetail'](arg1, arg2);
 }
@@ -138,6 +142,10 @@ export function GetOrderBook(arg1) {
   return window['go']['main']['App']['GetOrderBook'](arg1);
 }
 
+export function GetOrderBookWithRequest(arg1) {
+  return window['go']['main']['App']['GetOrderBookWithRequest'](arg1);
+}
+
 export function GetScreeningHistoryRun(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetScreeningHistoryRun'](arg1, arg2, arg3);
 }
@@ -156,6 +164,10 @@ export function GetSessionMessages(arg1) {
 
 export function GetStockRealTimeData(arg1) {
   return window['go']['main']['App']['GetStockRealTimeData'](arg1);
+}
+
+export function GetStockRealTimeDataWithRequest(arg1) {
+  return window['go']['main']['App']['GetStockRealTimeDataWithRequest'](arg1);
 }
 
 export function GetStrategies() {
@@ -188,6 +200,18 @@ export function ListScreeningHistory(arg1) {
 
 export function LogFrontendDebug(arg1, arg2, arg3) {
   return window['go']['main']['App']['LogFrontendDebug'](arg1, arg2, arg3);
+}
+
+export function LogFrontendError(arg1, arg2, arg3) {
+  return window['go']['main']['App']['LogFrontendError'](arg1, arg2, arg3);
+}
+
+export function LogFrontendInfo(arg1, arg2, arg3) {
+  return window['go']['main']['App']['LogFrontendInfo'](arg1, arg2, arg3);
+}
+
+export function LogFrontendWarning(arg1, arg2, arg3) {
+  return window['go']['main']['App']['LogFrontendWarning'](arg1, arg2, arg3);
 }
 
 export function NotifyFrontendReady() {

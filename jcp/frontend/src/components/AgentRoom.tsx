@@ -9,6 +9,8 @@ import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime';
 import { useMentionPicker } from '../hooks/useMentionPicker';
 import { useTheme } from '../contexts/ThemeContext';
 import { CancelMeeting } from '../../wailsjs/go/main/App';
+import { resolveRetryFeedback } from '../utils/meetingRetry';
+import { infoAppEvent } from '../utils/appLog';
 import 'markstream-react/index.css';
 
 // 进度事件类型
@@ -284,7 +286,8 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
         content: query,
         mentionIds: mentions,
         replyToId: replyTo?.id || '',
-        replyContent: replyTo?.content || ''
+        replyContent: replyTo?.content || '',
+        requestId: `meeting-${Date.now()}`,
       };
 
       // 统一模式：无论智能模式还是直接@模式，消息都通过事件实时推送
@@ -401,6 +404,7 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
   const handleRetryAgent = async (msg: ChatMessage) => {
     if (!session || retryingAgentId) return;
     const stockCode = session.stockCode;
+    const previousMessages = messages;
 
     setRetryingAgentId(msg.agentId);
     // 移除失败的消息
@@ -408,15 +412,35 @@ export const AgentRoom: React.FC<AgentRoomProps> = ({ session, onSessionUpdate }
     setSimulatingMap(prev => ({ ...prev, [stockCode]: true }));
 
     try {
+      let retryResult: ChatMessage | ChatMessage[] | null = null;
       if (msg.meetingMode === 'smart') {
         // 串行模式：重试并继续剩余专家
-        await retryAgentAndContinue(stockCode);
+        retryResult = await retryAgentAndContinue(stockCode);
       } else {
         // 独立模式：仅重试该专家
         const lastUserMsg = [...messages].reverse().find(m => m.agentId === 'user');
         const query = lastUserMsg?.content || '';
-        await retryAgent(stockCode, msg.agentId, query);
+        retryResult = await retryAgent(stockCode, msg.agentId, query);
       }
+
+      const latestMessages = await getSessionMessages(stockCode);
+      const resolution = resolveRetryFeedback(
+        previousMessages.filter((item) => item.id !== msg.id),
+        latestMessages,
+        retryResult,
+      );
+      infoAppEvent('meeting', 'retry feedback resolved', {
+        module: 'meeting',
+        action: 'retry_feedback.resolved',
+        stockCode,
+        agentId: msg.agentId,
+        meetingMode: msg.meetingMode || 'direct',
+        resolvedBy: resolution.source,
+        latestResultLen: resolution.latestResultLen,
+        fallbackResultLen: resolution.fallbackResultLen,
+        resultLen: resolution.messages.length,
+      });
+      setMessages(resolution.messages);
     } catch (e) {
       console.error('[AgentRoom] retryAgent error:', e);
       addSystemMessage(`${msg.agentName} 重试失败`);

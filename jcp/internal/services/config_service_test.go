@@ -210,6 +210,118 @@ func TestConfigServiceAddsLayoutKlineZoomDefaultForLegacyConfig(t *testing.T) {
 	}
 }
 
+func TestConfigServiceAddsLoggingDefaultsForLegacyConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.json")
+
+	legacyConfig := map[string]any{
+		"theme":           "light",
+		"candleColorMode": "red-up",
+		"aiConfigs":       []any{},
+		"indicators": map[string]any{
+			"ma": map[string]any{
+				"enabled": true,
+				"periods": []int{5, 10, 20},
+			},
+		},
+	}
+
+	writeJSONFile(t, configPath, legacyConfig)
+
+	cs, err := NewConfigService(tempDir)
+	if err != nil {
+		t.Fatalf("NewConfigService() error = %v", err)
+	}
+
+	raw, err := json.Marshal(cs.GetConfig())
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	logging, ok := payload["logging"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected logging config in payload, got %#v", payload["logging"])
+	}
+	if got := logging["globalLevel"]; got != "INFO" {
+		t.Fatalf("expected default logging.globalLevel INFO, got %#v", got)
+	}
+	moduleLevels, ok := logging["moduleLevels"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected logging.moduleLevels map, got %#v", logging["moduleLevels"])
+	}
+	if len(moduleLevels) != 0 {
+		t.Fatalf("expected empty logging.moduleLevels by default, got %#v", moduleLevels)
+	}
+}
+
+func TestConfigServicePreservesLoggingConfigAcrossReload(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.json")
+
+	configPayload := map[string]any{
+		"theme":           "light",
+		"candleColorMode": "red-up",
+		"aiConfigs":       []any{},
+		"logging": map[string]any{
+			"globalLevel": "WARN",
+			"moduleLevels": map[string]any{
+				"market":        "DEBUG",
+				"screening.sync": "INFO",
+			},
+		},
+		"indicators": map[string]any{
+			"ma": map[string]any{
+				"enabled": true,
+				"periods": []int{5, 10, 20},
+			},
+		},
+	}
+
+	writeJSONFile(t, configPath, configPayload)
+
+	cs, err := NewConfigService(tempDir)
+	if err != nil {
+		t.Fatalf("NewConfigService() error = %v", err)
+	}
+	if err := cs.UpdateConfig(cs.GetConfig()); err != nil {
+		t.Fatalf("UpdateConfig() error = %v", err)
+	}
+
+	reloaded, err := NewConfigService(tempDir)
+	if err != nil {
+		t.Fatalf("NewConfigService() reload error = %v", err)
+	}
+
+	raw, err := json.Marshal(reloaded.GetConfig())
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	logging, ok := payload["logging"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected logging config in payload, got %#v", payload["logging"])
+	}
+	if got := logging["globalLevel"]; got != "WARN" {
+		t.Fatalf("expected logging.globalLevel WARN, got %#v", got)
+	}
+	moduleLevels, ok := logging["moduleLevels"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected logging.moduleLevels map, got %#v", logging["moduleLevels"])
+	}
+	if moduleLevels["market"] != "DEBUG" || moduleLevels["screening.sync"] != "INFO" {
+		t.Fatalf("unexpected logging.moduleLevels = %#v", moduleLevels)
+	}
+}
+
 func writeJSONFile(t *testing.T, path string, value any) {
 	t.Helper()
 

@@ -62,6 +62,10 @@ func (cs *ConfigService) loadConfig() error {
 
 	// 用于识别字段是否在 JSON 中显式存在（避免把用户明确设置的 false 当成缺失字段）
 	var raw struct {
+		Logging *struct {
+			GlobalLevel  *string           `json:"globalLevel"`
+			ModuleLevels map[string]string `json:"moduleLevels"`
+		} `json:"logging"`
 		Layout *struct {
 			TextScalePercent *int `json:"textScalePercent"`
 			KlineZoomPercent *int `json:"klineZoomPercent"`
@@ -109,6 +113,7 @@ func (cs *ConfigService) loadConfig() error {
 	// 旧配置文件可能缺少 indicators 字段，Go 零值（nil/0/0.0）会导致前端异常
 	// 用默认值补全所有未设置的字段
 	defaultConfig := cs.defaultConfig()
+	applyLoggingDefaults(&config, raw.Logging, defaultConfig.Logging)
 	applyLayoutDefaults(&config, raw.Layout, defaultConfig.Layout)
 	applyScreeningDefaults(&config, raw.Screening, defaultConfig.Screening)
 
@@ -183,6 +188,10 @@ func (cs *ConfigService) defaultConfig() *models.AppConfig {
 			MaxSummaryLength:  300,
 			CompressThreshold: 5,
 		},
+		Logging: models.LoggingConfig{
+			GlobalLevel:  "INFO",
+			ModuleLevels: map[string]string{},
+		},
 		Indicators: models.IndicatorConfig{
 			MA:   models.MAConfig{Enabled: true, Periods: []int{5, 10, 20}},
 			EMA:  models.EMAConfig{Enabled: false, Periods: []int{12, 26}},
@@ -210,6 +219,26 @@ func (cs *ConfigService) defaultConfig() *models.AppConfig {
 			DefaultResultLimit: 100,
 			SQLTimeoutSeconds:  0,
 		},
+	}
+}
+
+func applyLoggingDefaults(
+	config *models.AppConfig,
+	raw *struct {
+		GlobalLevel  *string           `json:"globalLevel"`
+		ModuleLevels map[string]string `json:"moduleLevels"`
+	},
+	defaults models.LoggingConfig,
+) {
+	if raw == nil {
+		config.Logging = defaults
+		return
+	}
+	if raw.GlobalLevel == nil || strings.TrimSpace(config.Logging.GlobalLevel) == "" {
+		config.Logging.GlobalLevel = defaults.GlobalLevel
+	}
+	if config.Logging.ModuleLevels == nil {
+		config.Logging.ModuleLevels = map[string]string{}
 	}
 }
 

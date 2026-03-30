@@ -59,6 +59,8 @@ export function GetHotTrendPlatforms():Promise<Array<hottrend.PlatformInfo>>;
 
 export function GetKLineData(arg1:string,arg2:string,arg3:number):Promise<Array<models.KLineData>>;
 
+export function GetKLineDataWithRequest(arg1:main.KLineRequest):Promise<Array<models.KLineData>>;
+
 export function GetLongHuBangDetail(arg1:string,arg2:string):Promise<Array<models.LongHuBangDetail>>;
 
 export function GetLongHuBangList(arg1:number,arg2:number,arg3:string):Promise<services.LongHuBangListResult>;
@@ -75,6 +77,8 @@ export function GetOrCreateSession(arg1:string,arg2:string):Promise<models.Stock
 
 export function GetOrderBook(arg1:string):Promise<models.OrderBook>;
 
+export function GetOrderBookWithRequest(arg1:main.OrderBookRequest):Promise<models.OrderBook>;
+
 export function GetScreeningHistoryRun(arg1:number,arg2:number,arg3:number):Promise<services.ScreeningQueryResponse>;
 
 export function GetScreeningSyncStatus():Promise<services.ScreeningSyncStatus>;
@@ -84,6 +88,8 @@ export function GetScreeningUniverseSymbols(arg1:number):Promise<Array<string>>;
 export function GetSessionMessages(arg1:string):Promise<Array<models.ChatMessage>>;
 
 export function GetStockRealTimeData(arg1:Array<string>):Promise<Array<models.Stock>>;
+
+export function GetStockRealTimeDataWithRequest(arg1:main.StockRealTimeRequest):Promise<Array<models.Stock>>;
 
 export function GetStrategies():Promise<Array<models.Strategy>>;
 
@@ -100,6 +106,12 @@ export function Greet(arg1:string):Promise<string>;
 export function ListScreeningHistory(arg1:number):Promise<services.ScreeningHistoryResponse>;
 
 export function LogFrontendDebug(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function LogFrontendError(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function LogFrontendInfo(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function LogFrontendWarning(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function NotifyFrontendReady():Promise<void>;
 

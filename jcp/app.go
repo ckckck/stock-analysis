@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/run-bigpig/jcp/internal/adk"
 	"github.com/run-bigpig/jcp/internal/adk/mcp"
@@ -26,6 +27,29 @@ import (
 
 var log = logger.New("app")
 var frontendLog = logger.New("frontend")
+
+func applyLoggingConfig(config *models.AppConfig) {
+	if config == nil {
+		logger.SetGlobalLevel(logger.INFO)
+		logger.SetModuleLevels(nil)
+		return
+	}
+	globalLevel, ok := logger.ParseLevel(config.Logging.GlobalLevel)
+	if !ok {
+		globalLevel = logger.INFO
+	}
+	logger.SetGlobalLevel(globalLevel)
+
+	moduleLevels := make(map[string]logger.Level, len(config.Logging.ModuleLevels))
+	for module, rawLevel := range config.Logging.ModuleLevels {
+		level, ok := logger.ParseLevel(rawLevel)
+		if !ok {
+			continue
+		}
+		moduleLevels[module] = level
+	}
+	logger.SetModuleLevels(moduleLevels)
+}
 
 type screeningSQLGeneratorAdapter struct {
 	configService *services.ConfigService
@@ -144,13 +168,13 @@ func NewApp() *App {
 	if err := logger.InitFileLogger(filepath.Join(dataDir, "logs")); err != nil {
 		log.Error("初始化文件日志失败: %v", err)
 	}
-	logger.SetGlobalLevel(logger.DEBUG)
 
 	// 初始化配置服务
 	configService, err := services.NewConfigService(dataDir)
 	if err != nil {
 		panic(err)
 	}
+	applyLoggingConfig(configService.GetConfig())
 
 	// 初始化研报服务
 	researchReportService := services.NewResearchReportService()
@@ -368,6 +392,18 @@ func (a *App) LogFrontendDebug(scope string, message string, payload string) {
 	frontendLog.Debug("[%s] %s %s", scope, message, strings.TrimSpace(payload))
 }
 
+func (a *App) LogFrontendInfo(scope string, message string, payload string) {
+	frontendLog.Info("[%s] %s %s", scope, message, strings.TrimSpace(payload))
+}
+
+func (a *App) LogFrontendWarning(scope string, message string, payload string) {
+	frontendLog.Warn("[%s] %s %s", scope, message, strings.TrimSpace(payload))
+}
+
+func (a *App) LogFrontendError(scope string, message string, payload string) {
+	frontendLog.Error("[%s] %s %s", scope, message, strings.TrimSpace(payload))
+}
+
 // GetConfig 获取配置
 func (a *App) GetConfig() *models.AppConfig {
 	return a.configService.GetConfig()
@@ -378,6 +414,7 @@ func (a *App) UpdateConfig(config *models.AppConfig) string {
 	if err := a.configService.UpdateConfig(config); err != nil {
 		return err.Error()
 	}
+	applyLoggingConfig(config)
 	// 重新加载 MCP 配置
 	if a.mcpManager != nil && config.MCPServers != nil {
 		if err := a.mcpManager.LoadConfigs(config.MCPServers); err != nil {
@@ -739,19 +776,76 @@ func (a *App) RemoveFromWatchlist(symbol string) string {
 
 // GetStockRealTimeData 获取股票实时数据
 func (a *App) GetStockRealTimeData(codes []string) []models.Stock {
-	stocks, _ := a.marketService.GetStockRealTimeData(codes...)
+	log.Info("module=app action=realtime.request codes=%d symbols=%s", len(codes), strings.Join(codes, ","))
+	stocks, err := a.marketService.GetStockRealTimeData(codes...)
+	if err != nil {
+		log.Warn("module=app action=realtime.failed codes=%d symbols=%s err=%v", len(codes), strings.Join(codes, ","), err)
+		return []models.Stock{}
+	}
+	log.Info("module=app action=realtime.success codes=%d resultLen=%d", len(codes), len(stocks))
+	return stocks
+}
+
+// GetStockRealTimeDataWithRequest 获取股票实时数据（带 requestId）
+func (a *App) GetStockRealTimeDataWithRequest(req StockRealTimeRequest) []models.Stock {
+	requestID := strings.TrimSpace(req.RequestID)
+	log.Info("module=app action=realtime.request requestId=%s codes=%d symbols=%s", requestID, len(req.Codes), strings.Join(req.Codes, ","))
+	stocks, err := a.marketService.GetStockRealTimeDataWithRequest(requestID, req.Codes...)
+	if err != nil {
+		log.Warn("module=app action=realtime.failed requestId=%s codes=%d symbols=%s err=%v", requestID, len(req.Codes), strings.Join(req.Codes, ","), err)
+		return []models.Stock{}
+	}
+	log.Info("module=app action=realtime.success requestId=%s codes=%d resultLen=%d", requestID, len(req.Codes), len(stocks))
 	return stocks
 }
 
 // GetKLineData 获取K线数据
 func (a *App) GetKLineData(code string, period string, days int) []models.KLineData {
-	data, _ := a.marketService.GetKLineData(code, period, days)
+	log.Info("module=app action=kline.request symbol=%s period=%s days=%d", code, period, days)
+	data, err := a.marketService.GetKLineData(code, period, days)
+	if err != nil {
+		log.Warn("module=app action=kline.failed symbol=%s period=%s days=%d err=%v", code, period, days, err)
+		return []models.KLineData{}
+	}
+	log.Info("module=app action=kline.success symbol=%s period=%s days=%d resultLen=%d", code, period, days, len(data))
+	return data
+}
+
+// GetKLineDataWithRequest 获取K线数据（带 requestId）
+func (a *App) GetKLineDataWithRequest(req KLineRequest) []models.KLineData {
+	requestID := strings.TrimSpace(req.RequestID)
+	log.Info("module=app action=kline.request requestId=%s symbol=%s period=%s days=%d", requestID, req.Code, req.Period, req.Days)
+	data, err := a.marketService.GetKLineDataWithRequest(requestID, req.Code, req.Period, req.Days)
+	if err != nil {
+		log.Warn("module=app action=kline.failed requestId=%s symbol=%s period=%s days=%d err=%v", requestID, req.Code, req.Period, req.Days, err)
+		return []models.KLineData{}
+	}
+	log.Info("module=app action=kline.success requestId=%s symbol=%s period=%s days=%d resultLen=%d", requestID, req.Code, req.Period, req.Days, len(data))
 	return data
 }
 
 // GetOrderBook 获取盘口数据（真实五档）
 func (a *App) GetOrderBook(code string) models.OrderBook {
-	orderBook, _ := a.marketService.GetRealOrderBook(code)
+	log.Info("module=app action=orderbook.request symbol=%s", code)
+	orderBook, err := a.marketService.GetRealOrderBook(code)
+	if err != nil {
+		log.Warn("module=app action=orderbook.failed symbol=%s err=%v", code, err)
+		return models.OrderBook{}
+	}
+	log.Info("module=app action=orderbook.success symbol=%s bids=%d asks=%d", code, len(orderBook.Bids), len(orderBook.Asks))
+	return orderBook
+}
+
+// GetOrderBookWithRequest 获取盘口数据（带 requestId）
+func (a *App) GetOrderBookWithRequest(req OrderBookRequest) models.OrderBook {
+	requestID := strings.TrimSpace(req.RequestID)
+	log.Info("module=app action=orderbook.request requestId=%s symbol=%s", requestID, req.Code)
+	orderBook, err := a.marketService.GetRealOrderBookWithRequest(requestID, req.Code)
+	if err != nil {
+		log.Warn("module=app action=orderbook.failed requestId=%s symbol=%s err=%v", requestID, req.Code, err)
+		return models.OrderBook{}
+	}
+	log.Info("module=app action=orderbook.success requestId=%s symbol=%s bids=%d asks=%d", requestID, req.Code, len(orderBook.Bids), len(orderBook.Asks))
 	return orderBook
 }
 
@@ -1106,6 +1200,37 @@ type MeetingMessageRequest struct {
 	MentionIds   []string `json:"mentionIds"`
 	ReplyToId    string   `json:"replyToId"`
 	ReplyContent string   `json:"replyContent"`
+	RequestID    string   `json:"requestId"`
+}
+
+type StockRealTimeRequest struct {
+	Codes     []string `json:"codes"`
+	RequestID string   `json:"requestId"`
+}
+
+type KLineRequest struct {
+	Code      string `json:"code"`
+	Period    string `json:"period"`
+	Days      int    `json:"days"`
+	RequestID string `json:"requestId"`
+}
+
+type OrderBookRequest struct {
+	Code      string `json:"code"`
+	RequestID string `json:"requestId"`
+}
+
+func meetingLogFields(requestID string, stockCode string) string {
+	fields := make([]string, 0, 2)
+	requestID = strings.TrimSpace(requestID)
+	stockCode = strings.TrimSpace(stockCode)
+	if requestID != "" {
+		fields = append(fields, "requestId="+requestID)
+	}
+	if stockCode != "" {
+		fields = append(fields, "stockCode="+stockCode)
+	}
+	return strings.Join(fields, " ")
 }
 
 // cancelMeetingInternal 内部取消会议方法
@@ -1127,10 +1252,20 @@ func (a *App) CancelMeeting(stockCode string) bool {
 
 // SendMeetingMessage 发送会议室消息（@指定成员回复）
 func (a *App) SendMeetingMessage(req MeetingMessageRequest) []models.ChatMessage {
+	requestID := strings.TrimSpace(req.RequestID)
+	log.Info(
+		"module=meeting action=send_message.request requestId=%s stockCode=%s mentionCount=%d hasReply=%t contentLen=%d sessionExists=%t",
+		requestID,
+		req.StockCode,
+		len(req.MentionIds),
+		strings.TrimSpace(req.ReplyToId) != "",
+		len([]rune(req.Content)),
+		a.sessionService.GetSession(req.StockCode) != nil,
+	)
 	// 获取Session
 	session := a.sessionService.GetSession(req.StockCode)
 	if session == nil {
-		log.Warn("session not found: %s", req.StockCode)
+		log.Warn("module=meeting action=send_message.session_missing requestId=%s stockCode=%s", requestID, req.StockCode)
 		return []models.ChatMessage{}
 	}
 
@@ -1161,7 +1296,7 @@ func (a *App) SendMeetingMessage(req MeetingMessageRequest) []models.ChatMessage
 	a.sessionService.AddMessage(req.StockCode, userMsg)
 
 	// 获取股票数据
-	stocks, _ := a.marketService.GetStockRealTimeData(req.StockCode)
+	stocks, _ := a.marketService.GetStockRealTimeDataWithRequest(requestID, req.StockCode)
 	var stock models.Stock
 	if len(stocks) > 0 {
 		stock = stocks[0]
@@ -1171,7 +1306,7 @@ func (a *App) SendMeetingMessage(req MeetingMessageRequest) []models.ChatMessage
 	config := a.configService.GetConfig()
 	aiConfig := a.getDefaultAIConfig(config)
 	if aiConfig == nil {
-		log.Warn("no AI config found")
+		log.Warn("module=meeting action=send_message.ai_config_missing requestId=%s stockCode=%s", requestID, req.StockCode)
 		return []models.ChatMessage{}
 	}
 
@@ -1180,7 +1315,7 @@ func (a *App) SendMeetingMessage(req MeetingMessageRequest) []models.ChatMessage
 
 	// 判断是否为智能模式（无 @ 任何人）
 	if len(req.MentionIds) == 0 {
-		return a.runSmartMeeting(meetingCtx, req.StockCode, stock, req.Content, aiConfig, position)
+		return a.runSmartMeeting(meetingCtx, requestID, req.StockCode, stock, req.Content, aiConfig, position)
 	}
 
 	// 原有逻辑：@ 指定专家
@@ -1188,7 +1323,8 @@ func (a *App) SendMeetingMessage(req MeetingMessageRequest) []models.ChatMessage
 }
 
 // runSmartMeeting 智能会议模式
-func (a *App) runSmartMeeting(ctx context.Context, stockCode string, stock models.Stock, query string, aiConfig *models.AIConfig, position *models.StockPosition) []models.ChatMessage {
+func (a *App) runSmartMeeting(ctx context.Context, requestID string, stockCode string, stock models.Stock, query string, aiConfig *models.AIConfig, position *models.StockPosition) []models.ChatMessage {
+	log.Info("module=meeting action=smart_meeting.start %s agentCount=%d", meetingLogFields(requestID, stockCode), len(a.strategyService.GetEnabledAgents()))
 	allAgents := a.strategyService.GetEnabledAgents()
 	chatReq := meeting.ChatRequest{
 		StockCode: stockCode,
@@ -1221,9 +1357,10 @@ func (a *App) runSmartMeeting(ctx context.Context, stockCode string, stock model
 
 	responses, err := a.meetingService.RunSmartMeetingWithCallback(ctx, aiConfig, chatReq, respCallback, progressCallback)
 	if err != nil {
-		log.Error("runSmartMeeting error: %v", err)
+		log.Error("module=meeting action=smart_meeting.failed %s err=%v", meetingLogFields(requestID, stockCode), err)
 		return []models.ChatMessage{}
 	}
+	log.Info("module=meeting action=smart_meeting.success %s resultLen=%d", meetingLogFields(requestID, stockCode), len(responses))
 
 	// 返回所有响应（前端可能已通过事件收到，这里作为备份）
 	var messages []models.ChatMessage
@@ -1244,8 +1381,11 @@ func (a *App) runSmartMeeting(ctx context.Context, stockCode string, stock model
 
 // runDirectMeeting 直接 @ 指定专家模式（带事件推送）
 func (a *App) runDirectMeeting(ctx context.Context, req MeetingMessageRequest, stock models.Stock, aiConfig *models.AIConfig, position *models.StockPosition) []models.ChatMessage {
+	requestID := strings.TrimSpace(req.RequestID)
+	log.Info("module=meeting action=direct_meeting.start %s mentionCount=%d", meetingLogFields(requestID, req.StockCode), len(req.MentionIds))
 	agentConfigs := a.strategyService.GetAgentsByIDs(req.MentionIds)
 	if len(agentConfigs) == 0 {
+		log.Warn("module=meeting action=direct_meeting.no_agents %s mentionCount=%d", meetingLogFields(requestID, req.StockCode), len(req.MentionIds))
 		return []models.ChatMessage{}
 	}
 
@@ -1259,16 +1399,18 @@ func (a *App) runDirectMeeting(ctx context.Context, req MeetingMessageRequest, s
 
 	responses, err := a.meetingService.SendMessage(ctx, aiConfig, chatReq)
 	if err != nil {
-		log.Error("runDirectMeeting error: %v", err)
+		log.Error("module=meeting action=direct_meeting.failed %s err=%v", meetingLogFields(requestID, req.StockCode), err)
 		return []models.ChatMessage{}
 	}
+	log.Info("module=meeting action=direct_meeting.success %s resultLen=%d", meetingLogFields(requestID, req.StockCode), len(responses))
 
 	// 转换并保存响应，同时推送事件
-	return a.convertSaveAndEmitResponses(req.StockCode, responses, req.ReplyToId)
+	return a.convertSaveAndEmitResponses(requestID, req.StockCode, responses, req.ReplyToId)
 }
 
 // convertSaveAndEmitResponses 转换响应、保存并推送事件（统一体验）
-func (a *App) convertSaveAndEmitResponses(stockCode string, responses []meeting.ChatResponse, replyTo string) []models.ChatMessage {
+func (a *App) convertSaveAndEmitResponses(requestID string, stockCode string, responses []meeting.ChatResponse, replyTo string) []models.ChatMessage {
+	log.Debug("module=meeting action=responses.emit.start %s resultLen=%d", meetingLogFields(requestID, stockCode), len(responses))
 	var messages []models.ChatMessage
 	for _, resp := range responses {
 		msg := models.ChatMessage{
@@ -1288,13 +1430,16 @@ func (a *App) convertSaveAndEmitResponses(stockCode string, responses []meeting.
 		runtime.EventsEmit(a.ctx, "meeting:message:"+stockCode, msg)
 		messages = append(messages, msg)
 	}
+	log.Debug("module=meeting action=responses.emit.success %s resultLen=%d", meetingLogFields(requestID, stockCode), len(messages))
 	return messages
 }
 
 // RetryAgent 重试单个失败的专家（前端手动触发）
 func (a *App) RetryAgent(stockCode string, agentId string, query string) models.ChatMessage {
+	requestID := fmt.Sprintf("retry-agent-%d", time.Now().UnixNano())
+	log.Info("module=meeting action=retry_agent.request %s agentId=%s queryLen=%d", meetingLogFields(requestID, stockCode), agentId, len([]rune(query)))
 	// 获取股票数据
-	stocks, _ := a.marketService.GetStockRealTimeData(stockCode)
+	stocks, _ := a.marketService.GetStockRealTimeDataWithRequest(requestID, stockCode)
 	var stock models.Stock
 	if len(stocks) > 0 {
 		stock = stocks[0]
@@ -1304,14 +1449,14 @@ func (a *App) RetryAgent(stockCode string, agentId string, query string) models.
 	config := a.configService.GetConfig()
 	aiConfig := a.getDefaultAIConfig(config)
 	if aiConfig == nil {
-		log.Warn("RetryAgent: no AI config")
+		log.Warn("module=meeting action=retry_agent.ai_config_missing %s agentId=%s", meetingLogFields(requestID, stockCode), agentId)
 		return models.ChatMessage{AgentID: agentId, Error: "未配置 AI 服务"}
 	}
 
 	// 获取专家配置
 	agents := a.strategyService.GetAgentsByIDs([]string{agentId})
 	if len(agents) == 0 {
-		log.Warn("RetryAgent: agent not found: %s", agentId)
+		log.Warn("module=meeting action=retry_agent.agent_missing %s agentId=%s", meetingLogFields(requestID, stockCode), agentId)
 		return models.ChatMessage{AgentID: agentId, Error: "专家不存在"}
 	}
 	agentCfg := agents[0]
@@ -1337,7 +1482,7 @@ func (a *App) RetryAgent(stockCode string, agentId string, query string) models.
 	}
 
 	if err != nil {
-		log.Error("RetryAgent failed: %v", err)
+		log.Error("module=meeting action=retry_agent.failed %s agentId=%s err=%v", meetingLogFields(requestID, stockCode), agentId, err)
 		runtime.EventsEmit(a.ctx, "meeting:message:"+stockCode, msg)
 		return msg
 	}
@@ -1345,13 +1490,16 @@ func (a *App) RetryAgent(stockCode string, agentId string, query string) models.
 	// 成功：保存并推送
 	a.sessionService.AddMessage(stockCode, msg)
 	runtime.EventsEmit(a.ctx, "meeting:message:"+stockCode, msg)
+	log.Info("module=meeting action=retry_agent.success %s agentId=%s", meetingLogFields(requestID, stockCode), agentId)
 	return msg
 }
 
 // RetryAgentAndContinue 重试失败专家并继续执行剩余专家（前端手动触发）
 func (a *App) RetryAgentAndContinue(stockCode string) []models.ChatMessage {
+	requestID := fmt.Sprintf("retry-continue-%d", time.Now().UnixNano())
+	log.Info("module=meeting action=retry_continue.request %s", meetingLogFields(requestID, stockCode))
 	if !a.meetingService.HasInterruptedMeeting(stockCode) {
-		log.Warn("RetryAgentAndContinue: no interrupted meeting for %s", stockCode)
+		log.Warn("module=meeting action=retry_continue.no_interrupted_meeting %s", meetingLogFields(requestID, stockCode))
 		return []models.ChatMessage{}
 	}
 
@@ -1390,7 +1538,7 @@ func (a *App) RetryAgentAndContinue(stockCode string) []models.ChatMessage {
 
 	responses, err := a.meetingService.ContinueMeeting(meetingCtx, stockCode, respCallback, progressCallback)
 	if err != nil {
-		log.Error("RetryAgentAndContinue error: %v", err)
+		log.Error("module=meeting action=retry_continue.failed %s err=%v", meetingLogFields(requestID, stockCode), err)
 		return []models.ChatMessage{}
 	}
 
@@ -1407,6 +1555,7 @@ func (a *App) RetryAgentAndContinue(stockCode string) []models.ChatMessage {
 			MeetingMode: resp.MeetingMode,
 		})
 	}
+	log.Info("module=meeting action=retry_continue.success %s resultLen=%d", meetingLogFields(requestID, stockCode), len(messages))
 	return messages
 }
 

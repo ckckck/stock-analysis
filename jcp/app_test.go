@@ -9,6 +9,22 @@ import (
 	"github.com/run-bigpig/jcp/internal/services"
 )
 
+func TestMeetingLogFieldsIncludesRequestIDAndStockCode(t *testing.T) {
+	got := meetingLogFields("meeting-123", "sh600000")
+	want := "requestId=meeting-123 stockCode=sh600000"
+	if got != want {
+		t.Fatalf("meetingLogFields() = %q, want %q", got, want)
+	}
+}
+
+func TestMeetingLogFieldsOmitsBlankRequestID(t *testing.T) {
+	got := meetingLogFields("", "sh600000")
+	want := "stockCode=sh600000"
+	if got != want {
+		t.Fatalf("meetingLogFields() = %q, want %q", got, want)
+	}
+}
+
 func TestAppCancelScreeningQueryStopsInFlightRequest(t *testing.T) {
 	tempDir := t.TempDir()
 	configService, err := services.NewConfigService(tempDir)
