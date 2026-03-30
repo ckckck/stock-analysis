@@ -3,7 +3,9 @@ import {
   createPendingScreeningSyncStatus,
   resolveScreeningPresetFromResult,
   resolveScreeningSyncCoverageStats,
+  resolveSyncDialogHeaderControls,
   resolveScreeningPrimaryActionLabel,
+  resolveSyncOnlyMinimizedCardState,
   resolveSyncDialogCopy,
   resolveTopbarSyncButtonState,
   shouldContinueAfterScreeningSync,
@@ -77,15 +79,100 @@ describe('resolveSyncDialogCopy', () => {
     expect(resolveSyncDialogCopy('sync-only')).toEqual({
       title: '确认后开始同步',
       description: '本次会按当前设置同步本地数据库，不会触发 AI 筛选。',
-      confirmLabel: '开始同步',
+      primaryActionLabel: '开始同步',
+      secondaryActionLabel: undefined,
     });
   });
 
   it('returns screening copy', () => {
     expect(resolveSyncDialogCopy('screening')).toEqual({
-      title: '确认同步后开始筛选',
-      description: '本次会先按当前设置同步本地数据库，再基于最新数据执行 AI 筛选。',
-      confirmLabel: '开始同步并筛选',
+      title: '确认后开始筛选',
+      description: '本次会直接基于当前已同步数据执行 AI 筛选。',
+      primaryActionLabel: '开始筛选',
+      secondaryActionLabel: undefined,
+    });
+  });
+});
+
+describe('resolveSyncOnlyMinimizedCardState', () => {
+  it('hides the floating card when sync dialog is not minimized', () => {
+    expect(resolveSyncOnlyMinimizedCardState({
+      visible: true,
+      minimized: false,
+      loading: true,
+      syncStatus: {
+        runStatus: 'running',
+        progressPercent: 25,
+        completedStocks: 10,
+        totalStocks: 40,
+        lastMessage: '同步中',
+      },
+    }).visible).toBe(false);
+  });
+
+  it('shows running progress while sync-only dialog is minimized', () => {
+    expect(resolveSyncOnlyMinimizedCardState({
+      visible: true,
+      minimized: true,
+      loading: true,
+      syncStatus: {
+        runStatus: 'running',
+        progressPercent: 25,
+        completedStocks: 10,
+        totalStocks: 40,
+        lastMessage: '正在处理 sh600000',
+      },
+    })).toEqual({
+      visible: true,
+      title: '同步进行中',
+      progressPercent: 25,
+      progressLabel: '10 / 40',
+      detail: '正在处理 sh600000',
+    });
+  });
+
+  it('keeps the minimized card restorable after sync completes', () => {
+    expect(resolveSyncOnlyMinimizedCardState({
+      visible: true,
+      minimized: true,
+      loading: false,
+      syncStatus: {
+        runStatus: 'completed',
+        progressPercent: 100,
+        completedStocks: 40,
+        totalStocks: 40,
+        lastMessage: '已完成同步',
+      },
+    })).toEqual({
+      visible: true,
+      title: '同步已完成',
+      progressPercent: 100,
+      progressLabel: '40 / 40',
+      detail: '已完成同步',
+    });
+  });
+});
+
+describe('resolveSyncDialogHeaderControls', () => {
+  it('keeps minimize available while sync-only dialog is running', () => {
+    expect(resolveSyncDialogHeaderControls({
+      minimizable: true,
+      loading: true,
+    })).toEqual({
+      showMinimize: true,
+      minimizeDisabled: false,
+      closeDisabled: true,
+    });
+  });
+
+  it('hides minimize when the dialog is not minimizable', () => {
+    expect(resolveSyncDialogHeaderControls({
+      minimizable: false,
+      loading: false,
+    })).toEqual({
+      showMinimize: false,
+      minimizeDisabled: true,
+      closeDisabled: false,
     });
   });
 });

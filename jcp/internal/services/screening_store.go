@@ -52,6 +52,18 @@ type ScreeningSyncJobState struct {
 	UpdatedAt           time.Time
 }
 
+type ScreeningSyncSymbolState struct {
+	Symbol              string
+	NoNewStreak         int
+	LastLocalTradeDate  string
+	LastSourceTradeDate string
+	LastTargetTradeDate string
+	Excluded            bool
+	ExcludeReason       string
+	UpdatedAt           time.Time
+	ExcludedAt          *time.Time
+}
+
 type ScreeningRun struct {
 	ID              int64
 	Prompt          string
@@ -174,6 +186,17 @@ func (s *ScreeningStore) initSchema() error {
 			updated_at TEXT NOT NULL,
 			PRIMARY KEY (dataset, market_scope)
 		)`,
+		`CREATE TABLE IF NOT EXISTS sync_symbol_states (
+			symbol TEXT PRIMARY KEY,
+			no_new_streak INTEGER NOT NULL DEFAULT 0,
+			last_local_trade_date TEXT NOT NULL DEFAULT '',
+			last_source_trade_date TEXT NOT NULL DEFAULT '',
+			last_target_trade_date TEXT NOT NULL DEFAULT '',
+			excluded INTEGER NOT NULL DEFAULT 0,
+			exclude_reason TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL,
+			excluded_at TEXT NOT NULL DEFAULT ''
+		)`,
 		`CREATE TABLE IF NOT EXISTS screening_runs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			prompt TEXT NOT NULL,
@@ -202,8 +225,10 @@ func (s *ScreeningStore) initSchema() error {
 		`CREATE INDEX IF NOT EXISTS idx_daily_bars_symbol_trade_date ON daily_bars (symbol, trade_date DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_daily_snapshots_symbol_trade_date ON daily_snapshots (symbol, trade_date DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_sync_jobs_status_updated_at ON sync_jobs (status, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_sync_symbol_states_excluded ON sync_symbol_states (excluded, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_screening_runs_created_at ON screening_runs (created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_screening_run_results_run_id_rank ON screening_run_results (run_id, rank)`,
+		`DROP VIEW IF EXISTS v_stock_latest_daily`,
 		`CREATE VIEW IF NOT EXISTS v_stock_latest_daily AS
 			WITH latest_bar AS (
 				SELECT symbol, MAX(trade_date) AS trade_date
@@ -246,7 +271,13 @@ func (s *ScreeningStore) initSchema() error {
 			LEFT JOIN daily_snapshots ds
 				ON ds.symbol = ls.symbol
 				AND ds.trade_date = ls.trade_date
-			WHERE sb.is_active = 1`,
+			WHERE sb.is_active = 1
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM sync_symbol_states ss
+				WHERE ss.symbol = sb.symbol
+				  AND ss.excluded = 1
+			  )`,
 	}
 
 	for _, statement := range statements {
@@ -435,6 +466,179 @@ func (s *ScreeningStore) GetSyncJobState(dataset, marketScope string) (*Screenin
 	}
 	state.UpdatedAt = parsed
 	return &state, nil
+}
+
+func (s *ScreeningStore) UpsertSyncSymbolState(state ScreeningSyncSymbolState) error {
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now().UTC()
+	}
+
+	excludedAt := ""
+	if state.ExcludedAt != nil {
+		excludedAt = formatScreeningStoreTime(*state.ExcludedAt)
+	}
+
+	_, err := s.db.Exec(
+		`INSERT INTO sync_symbol_states (
+			symbol, no_new_streak, last_local_trade_date, last_source_trade_date, last_target_trade_date,
+			excluded, exclude_reason, updated_at, excluded_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(symbol) DO UPDATE SET
+			no_new_streak = excluded.no_new_streak,
+			last_local_trade_date = excluded.last_local_trade_date,
+			last_source_trade_date = excluded.last_source_trade_date,
+			last_target_trade_date = excluded.last_target_trade_date,
+			excluded = excluded.excluded,
+			exclude_reason = excluded.exclude_reason,
+			updated_at = excluded.updated_at,
+			excluded_at = excluded.excluded_at`,
+		state.Symbol,
+		state.NoNewStreak,
+		state.LastLocalTradeDate,
+		state.LastSourceTradeDate,
+		state.LastTargetTradeDate,
+		boolToInt(state.Excluded),
+		state.ExcludeReason,
+		formatScreeningStoreTime(state.UpdatedAt),
+		excludedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert sync symbol state: %w", err)
+	}
+	return nil
+}
+
+func (s *ScreeningStore) GetSyncSymbolState(symbol string) (*ScreeningSyncSymbolState, error) {
+	row := s.db.QueryRow(
+		`SELECT symbol, no_new_streak, last_local_trade_date, last_source_trade_date, last_target_trade_date,
+		        excluded, exclude_reason, updated_at, excluded_at
+		 FROM sync_symbol_states
+		 WHERE symbol = ?`,
+		symbol,
+	)
+
+	var state ScreeningSyncSymbolState
+	var excluded int
+	var updatedAt string
+	var excludedAt string
+	if err := row.Scan(
+		&state.Symbol,
+		&state.NoNewStreak,
+		&state.LastLocalTradeDate,
+		&state.LastSourceTradeDate,
+		&state.LastTargetTradeDate,
+		&excluded,
+		&state.ExcludeReason,
+		&updatedAt,
+		&excludedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get sync symbol state: %w", err)
+	}
+
+	parsedUpdatedAt, err := parseScreeningStoreTime(updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	state.UpdatedAt = parsedUpdatedAt
+	state.Excluded = excluded != 0
+	if strings.TrimSpace(excludedAt) != "" {
+		parsedExcludedAt, err := parseScreeningStoreTime(excludedAt)
+		if err != nil {
+			return nil, err
+		}
+		state.ExcludedAt = &parsedExcludedAt
+	}
+	return &state, nil
+}
+
+func (s *ScreeningStore) GetSyncSymbolStates(symbols []string) (map[string]ScreeningSyncSymbolState, error) {
+	normalized := normalizeScreeningUniverseSymbols(symbols)
+	if len(normalized) == 0 {
+		return map[string]ScreeningSyncSymbolState{}, nil
+	}
+
+	states := make(map[string]ScreeningSyncSymbolState, len(normalized))
+	for _, chunk := range chunkScreeningSymbols(normalized, screeningStoreSymbolChunkSize) {
+		placeholders := screeningStorePlaceholders(len(chunk))
+		args := make([]any, 0, len(chunk))
+		for _, symbol := range chunk {
+			args = append(args, symbol)
+		}
+		rows, err := s.db.Query(
+			fmt.Sprintf(
+				`SELECT symbol, no_new_streak, last_local_trade_date, last_source_trade_date, last_target_trade_date,
+				        excluded, exclude_reason, updated_at, excluded_at
+				   FROM sync_symbol_states
+				  WHERE symbol IN (%s)`,
+				placeholders,
+			),
+			args...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("get sync symbol states: %w", err)
+		}
+		for rows.Next() {
+			var state ScreeningSyncSymbolState
+			var excluded int
+			var updatedAt string
+			var excludedAt string
+			if err := rows.Scan(
+				&state.Symbol,
+				&state.NoNewStreak,
+				&state.LastLocalTradeDate,
+				&state.LastSourceTradeDate,
+				&state.LastTargetTradeDate,
+				&excluded,
+				&state.ExcludeReason,
+				&updatedAt,
+				&excludedAt,
+			); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan sync symbol state: %w", err)
+			}
+			parsedUpdatedAt, err := parseScreeningStoreTime(updatedAt)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			state.UpdatedAt = parsedUpdatedAt
+			state.Excluded = excluded != 0
+			if strings.TrimSpace(excludedAt) != "" {
+				parsedExcludedAt, err := parseScreeningStoreTime(excludedAt)
+				if err != nil {
+					rows.Close()
+					return nil, err
+				}
+				state.ExcludedAt = &parsedExcludedAt
+			}
+			states[state.Symbol] = state
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterate sync symbol states: %w", err)
+		}
+		rows.Close()
+	}
+	return states, nil
+}
+
+func (s *ScreeningStore) ListExcludedSyncSymbols(symbols []string) ([]string, error) {
+	states, err := s.GetSyncSymbolStates(symbols)
+	if err != nil {
+		return nil, err
+	}
+	excluded := make([]string, 0, len(states))
+	for _, symbol := range normalizeScreeningUniverseSymbols(symbols) {
+		state, ok := states[symbol]
+		if !ok || !state.Excluded {
+			continue
+		}
+		excluded = append(excluded, symbol)
+	}
+	return excluded, nil
 }
 
 func (s *ScreeningStore) CreateScreeningRun(run ScreeningRun) (int64, error) {
@@ -651,6 +855,12 @@ func (s *ScreeningStore) ListScreeningUniverseSymbols(scopes models.ScreeningMar
 		SELECT DISTINCT sb.symbol
 		FROM stocks_basic sb
 		WHERE sb.is_active = 1
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM sync_symbol_states ss
+			WHERE ss.symbol = sb.symbol
+			  AND ss.excluded = 1
+		  )
 		  AND EXISTS (
 			SELECT 1
 			FROM daily_bars db

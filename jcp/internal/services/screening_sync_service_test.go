@@ -628,7 +628,7 @@ func TestScreeningSyncReportsDiagnosticEventWhenStockFetchFails(t *testing.T) {
 		stocks: []ScreeningStockBasic{
 			{Symbol: "sh600804", Name: "鹏博士", Market: "上海", IsActive: true},
 		},
-		bars: map[string][]models.KLineData{},
+		bars:       map[string][]models.KLineData{},
 		tradeDates: []string{"2026-03-25"},
 		dailyBarErrors: map[string]error{
 			"sh600804": fmt.Errorf("kline api status 456 for sh600804: blocked"),
@@ -1008,6 +1008,126 @@ func TestScreeningSyncContinuesAfterSingleSymbolFailure(t *testing.T) {
 	assertTableCount(t, store, "daily_bars", 1)
 }
 
+func TestScreeningSyncExcludesPersistentlyStaleSymbols(t *testing.T) {
+	configService, store := newScreeningSyncTestServices(t)
+
+	if _, err := store.db.Exec(`
+		INSERT INTO daily_bars (symbol, trade_date, open, high, low, close, volume, amount) VALUES
+			('sh600804', '2026-02-13', 4.9, 5.0, 4.8, 4.95, 1000, 10000)
+	`); err != nil {
+		t.Fatalf("seed local daily_bars error = %v", err)
+	}
+
+	source := &fakeScreeningMarketSource{
+		stocks: []ScreeningStockBasic{
+			{Symbol: "sh600804", Name: "退鹏博", Market: "上海", IsActive: true},
+		},
+		bars: map[string][]models.KLineData{
+			"sh600804": makeDailyBars("2026-02-13", []float64{4.95}),
+		},
+		tradeDates: makeRecentWeekdayTradeDates("2026-03-19", 30),
+	}
+
+	svc := NewScreeningSyncService(configService, store, source)
+	svc.now = func() time.Time {
+		return time.Date(2026, 3, 19, 16, 0, 0, 0, time.UTC)
+	}
+
+	for i := 0; i < 3; i++ {
+		status, err := svc.SyncWithOptions(context.Background(), ScreeningSyncRunOptions{
+			Mode: ScreeningSyncModeManual,
+		}, nil)
+		if err != nil {
+			t.Fatalf("SyncWithOptions() run %d error = %v", i+1, err)
+		}
+		if status.RunStatus != string(ScreeningSyncRunStatusCompleted) {
+			t.Fatalf("status.RunStatus run %d = %q, want completed", i+1, status.RunStatus)
+		}
+	}
+
+	state, err := store.GetSyncSymbolState("sh600804")
+	if err != nil {
+		t.Fatalf("GetSyncSymbolState() error = %v", err)
+	}
+	if state == nil {
+		t.Fatal("GetSyncSymbolState() = nil, want state")
+	}
+	if !state.Excluded {
+		t.Fatalf("state.Excluded = %v, want true", state.Excluded)
+	}
+	if state.NoNewStreak != 3 {
+		t.Fatalf("state.NoNewStreak = %d, want 3", state.NoNewStreak)
+	}
+	if got, want := state.LastSourceTradeDate, "2026-02-13"; got != want {
+		t.Fatalf("state.LastSourceTradeDate = %q, want %q", got, want)
+	}
+
+	status, err := svc.SyncWithOptions(context.Background(), ScreeningSyncRunOptions{
+		Mode: ScreeningSyncModeManual,
+	}, nil)
+	if err != nil {
+		t.Fatalf("SyncWithOptions() fourth run error = %v", err)
+	}
+	if status.TotalStocks != 0 {
+		t.Fatalf("status.TotalStocks after exclusion = %d, want 0", status.TotalStocks)
+	}
+	if source.dailyBarCalls["sh600804"] != 3 {
+		t.Fatalf("dailyBarCalls[sh600804] = %d, want 3", source.dailyBarCalls["sh600804"])
+	}
+}
+
+func TestScreeningSyncCoverageIgnoresExcludedSymbols(t *testing.T) {
+	configService, store := newScreeningSyncTestServices(t)
+
+	if _, err := store.db.Exec(`
+		INSERT INTO daily_bars (symbol, trade_date, open, high, low, close, volume, amount) VALUES
+			('sz000001', '2026-03-18', 12, 12.2, 11.9, 12.1, 1000, 10000),
+			('sh600804', '2026-02-13', 4.9, 5.0, 4.8, 4.95, 1000, 10000)
+	`); err != nil {
+		t.Fatalf("seed local daily_bars error = %v", err)
+	}
+	if err := store.UpsertSyncSymbolState(ScreeningSyncSymbolState{
+		Symbol:              "sh600804",
+		NoNewStreak:         3,
+		LastLocalTradeDate:  "2026-02-13",
+		LastSourceTradeDate: "2026-02-13",
+		LastTargetTradeDate: "2026-03-19",
+		Excluded:            true,
+		ExcludeReason:       "persistently_stale_no_new_bars",
+		UpdatedAt:           time.Date(2026, 3, 19, 16, 0, 0, 0, time.UTC),
+		ExcludedAt:          timePtr(time.Date(2026, 3, 19, 16, 0, 0, 0, time.UTC)),
+	}); err != nil {
+		t.Fatalf("UpsertSyncSymbolState() error = %v", err)
+	}
+
+	source := &fakeScreeningMarketSource{
+		stocks: []ScreeningStockBasic{
+			{Symbol: "sh600804", Name: "退鹏博", Market: "上海", IsActive: true},
+			{Symbol: "sz000001", Name: "平安银行", Market: "深圳", IsActive: true},
+		},
+		tradeDates: []string{"2026-03-19", "2026-03-18"},
+	}
+
+	svc := NewScreeningSyncService(configService, store, source)
+	svc.now = func() time.Time {
+		return time.Date(2026, 3, 19, 16, 0, 0, 0, time.UTC)
+	}
+
+	status, err := svc.GetStatus()
+	if err != nil {
+		t.Fatalf("GetStatus() error = %v", err)
+	}
+	if status.MarketStockCount != 1 {
+		t.Fatalf("status.MarketStockCount = %d, want 1", status.MarketStockCount)
+	}
+	if status.PendingSyncStocks != 0 {
+		t.Fatalf("status.PendingSyncStocks = %d, want 0", status.PendingSyncStocks)
+	}
+	if status.SyncedToLatestStocks != 1 {
+		t.Fatalf("status.SyncedToLatestStocks = %d, want 1", status.SyncedToLatestStocks)
+	}
+}
+
 type fakeScreeningMarketSource struct {
 	stocks             []ScreeningStockBasic
 	bars               map[string][]models.KLineData
@@ -1119,6 +1239,25 @@ func makeDailyBars(startDate string, closes []float64) []models.KLineData {
 		})
 	}
 	return bars
+}
+
+func makeRecentWeekdayTradeDates(latest string, count int) []string {
+	day, err := time.Parse("2006-01-02", latest)
+	if err != nil {
+		panic(err)
+	}
+	tradeDates := make([]string, 0, count)
+	for len(tradeDates) < count {
+		if weekday := day.Weekday(); weekday != time.Saturday && weekday != time.Sunday {
+			tradeDates = append(tradeDates, day.Format("2006-01-02"))
+		}
+		day = day.AddDate(0, 0, -1)
+	}
+	return tradeDates
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
 }
 
 func makeCloseValues(count int, start float64) []float64 {

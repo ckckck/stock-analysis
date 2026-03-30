@@ -33,6 +33,7 @@ func TestNewScreeningStoreCreatesSchemaAndIndexes(t *testing.T) {
 		"daily_snapshots",
 		"sync_state",
 		"sync_jobs",
+		"sync_symbol_states",
 		"screening_runs",
 		"screening_run_results",
 	} {
@@ -44,6 +45,7 @@ func TestNewScreeningStoreCreatesSchemaAndIndexes(t *testing.T) {
 		"idx_daily_bars_symbol_trade_date",
 		"idx_daily_snapshots_symbol_trade_date",
 		"idx_sync_jobs_status_updated_at",
+		"idx_sync_symbol_states_excluded",
 		"idx_screening_runs_created_at",
 		"idx_screening_run_results_run_id_rank",
 	} {
@@ -225,6 +227,86 @@ func TestScreeningStoreSyncStateAndRunHistoryHelpers(t *testing.T) {
 	}
 	if results[0].RunID != runID || results[0].Rank != 1 || results[1].Rank != 2 {
 		t.Fatalf("ListScreeningRunResults() = %#v", results)
+	}
+}
+
+func TestScreeningStoreSyncSymbolStateHelpers(t *testing.T) {
+	tempDir := t.TempDir()
+
+	store, err := NewScreeningStore(tempDir)
+	if err != nil {
+		t.Fatalf("NewScreeningStore() error = %v", err)
+	}
+	defer store.Close()
+
+	excludedAt := time.Date(2026, 3, 25, 13, 0, 0, 0, time.UTC)
+	expected := ScreeningSyncSymbolState{
+		Symbol:              "sh600804",
+		NoNewStreak:         3,
+		LastLocalTradeDate:  "2025-07-02",
+		LastSourceTradeDate: "2025-07-02",
+		LastTargetTradeDate: "2026-03-24",
+		Excluded:            true,
+		ExcludeReason:       "persistently_stale_no_new_bars",
+		UpdatedAt:           time.Date(2026, 3, 25, 13, 1, 0, 0, time.UTC),
+		ExcludedAt:          &excludedAt,
+	}
+	if err := store.UpsertSyncSymbolState(expected); err != nil {
+		t.Fatalf("UpsertSyncSymbolState() error = %v", err)
+	}
+	if err := store.UpsertSyncSymbolState(ScreeningSyncSymbolState{
+		Symbol:              "sz000001",
+		NoNewStreak:         1,
+		LastLocalTradeDate:  "2026-03-24",
+		LastSourceTradeDate: "2026-03-24",
+		LastTargetTradeDate: "2026-03-24",
+		Excluded:            false,
+		ExcludeReason:       "",
+		UpdatedAt:           time.Date(2026, 3, 25, 13, 2, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("UpsertSyncSymbolState(active) error = %v", err)
+	}
+
+	got, err := store.GetSyncSymbolState(expected.Symbol)
+	if err != nil {
+		t.Fatalf("GetSyncSymbolState() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetSyncSymbolState() = nil, want state")
+	}
+	if got.Symbol != expected.Symbol ||
+		got.NoNewStreak != expected.NoNewStreak ||
+		got.LastLocalTradeDate != expected.LastLocalTradeDate ||
+		got.LastSourceTradeDate != expected.LastSourceTradeDate ||
+		got.LastTargetTradeDate != expected.LastTargetTradeDate ||
+		got.Excluded != expected.Excluded ||
+		got.ExcludeReason != expected.ExcludeReason ||
+		!got.UpdatedAt.Equal(expected.UpdatedAt) ||
+		got.ExcludedAt == nil ||
+		!got.ExcludedAt.Equal(excludedAt) {
+		t.Fatalf("GetSyncSymbolState() = %#v, want %#v", got, expected)
+	}
+
+	states, err := store.GetSyncSymbolStates([]string{"sh600804", "sz000001", "sz000002"})
+	if err != nil {
+		t.Fatalf("GetSyncSymbolStates() error = %v", err)
+	}
+	if len(states) != 2 {
+		t.Fatalf("len(GetSyncSymbolStates()) = %d, want 2", len(states))
+	}
+	if !states["sh600804"].Excluded {
+		t.Fatalf("states[sh600804] = %#v, want excluded", states["sh600804"])
+	}
+	if states["sz000001"].Excluded {
+		t.Fatalf("states[sz000001] = %#v, want not excluded", states["sz000001"])
+	}
+
+	excluded, err := store.ListExcludedSyncSymbols([]string{"sh600804", "sz000001", "sz000002"})
+	if err != nil {
+		t.Fatalf("ListExcludedSyncSymbols() error = %v", err)
+	}
+	if got, want := excluded, []string{"sh600804"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("ListExcludedSyncSymbols() = %#v, want %#v", got, want)
 	}
 }
 

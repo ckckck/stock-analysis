@@ -80,6 +80,13 @@ const (
 	ScreeningSyncRunStatusCompleted ScreeningSyncRunStatus = "completed"
 )
 
+const (
+	screeningSyncExcludeReasonPersistentlyStale = "persistently_stale_no_new_bars"
+	screeningSyncNoNewStreakExclusionThreshold  = 3
+	screeningSyncTradeDateLagExclusionThreshold = 20
+	screeningSyncTradeDateLagLookbackWindow     = 240
+)
+
 type ScreeningSyncRunOptions struct {
 	Mode        ScreeningSyncMode `json:"mode"`
 	LimitStocks int               `json:"limitStocks"`
@@ -235,7 +242,31 @@ func (s *ScreeningSyncService) SyncWithOptions(
 		return status, err
 	}
 	candidateSymbols := extractScreeningSyncSymbols(stocks)
+	excludedSymbols, err := s.store.ListExcludedSyncSymbols(candidateSymbols)
+	if err != nil {
+		status.RunStatus = string(ScreeningSyncRunStatusFailed)
+		status.CurrentStage = "prepare"
+		status.Error = err.Error()
+		progress.RunStatus = string(ScreeningSyncRunStatusFailed)
+		progress.CurrentStage = "prepare"
+		progress.Error = status.Error
+		s.emitScreeningSyncProgress(progress, report)
+		return status, err
+	}
+	stocks = filterScreeningStocksExcludingSymbols(stocks, excludedSymbols)
+	candidateSymbols = extractScreeningSyncSymbols(stocks)
 	status.SyncedSymbols = candidateSymbols
+	syncSymbolStates, err := s.store.GetSyncSymbolStates(candidateSymbols)
+	if err != nil {
+		status.RunStatus = string(ScreeningSyncRunStatusFailed)
+		status.CurrentStage = "prepare"
+		status.Error = err.Error()
+		progress.RunStatus = string(ScreeningSyncRunStatusFailed)
+		progress.CurrentStage = "prepare"
+		progress.Error = status.Error
+		s.emitScreeningSyncProgress(progress, report)
+		return status, err
+	}
 
 	state, err := s.store.GetSyncState(screeningSyncStateDataset, scopeKey)
 	if err != nil {
@@ -383,10 +414,10 @@ func (s *ScreeningSyncService) SyncWithOptions(
 		status.LastMessage = fmt.Sprintf("syncing %s", stock.Symbol)
 		status.ActiveSource = ""
 		s.appendStatusEvent(status, ScreeningSyncEvent{
-			Time:    formatScreeningStoreTime(s.now().UTC()),
-			Symbol:  stock.Symbol,
-			Name:    stock.Name,
-			Status:  "fetch",
+			Time:   formatScreeningStoreTime(s.now().UTC()),
+			Symbol: stock.Symbol,
+			Name:   stock.Name,
+			Status: "fetch",
 			Message: fmt.Sprintf(
 				"syncing %s: target=%s localLatest=%s lookback=%d",
 				stock.Symbol,
@@ -423,11 +454,11 @@ func (s *ScreeningSyncService) SyncWithOptions(
 			status.ProgressPercent = calculateScreeningSyncPercent(status.CompletedStocks, len(stocks))
 			status.LastMessage = fmt.Sprintf("skip %s after fetch failure", stock.Symbol)
 			s.appendStatusEvent(status, ScreeningSyncEvent{
-				Time:    formatScreeningStoreTime(s.now().UTC()),
-				Symbol:  stock.Symbol,
-				Name:    stock.Name,
-				Source:  status.ActiveSource,
-				Status:  "error",
+				Time:   formatScreeningStoreTime(s.now().UTC()),
+				Symbol: stock.Symbol,
+				Name:   stock.Name,
+				Source: status.ActiveSource,
+				Status: "error",
 				Message: fmt.Sprintf(
 					"fetch failed for %s: target=%s localLatest=%s lookback=%d err=%v",
 					stock.Symbol,
@@ -446,8 +477,28 @@ func (s *ScreeningSyncService) SyncWithOptions(
 			continue
 		}
 
+		sourceLatestTradeDate := latestTradeDateFromBars(bars)
 		filteredBars := filterBarsForSync(bars, latestLocalTradeDates[stock.Symbol], cfg.InitialSyncDays)
 		if len(filteredBars) == 0 {
+			syncState, tradeDateLag, stateErr := s.recordStaleSyncSymbolState(
+				syncSymbolStates,
+				stock.Symbol,
+				latestLocalTradeDates[stock.Symbol],
+				sourceLatestTradeDate,
+				targetTradeDate,
+			)
+			if stateErr != nil {
+				status.RunStatus = string(ScreeningSyncRunStatusFailed)
+				status.CurrentStage = "failed"
+				status.Error = stateErr.Error()
+				status.LastMessage = status.Error
+				s.persistScreeningSyncJobState(scopeKey, options, status, &ScreeningSyncJobState{
+					CurrentIndex:    idx,
+					CompletedStocks: status.CompletedStocks,
+				}, status.Error)
+				s.emitScreeningSyncProgress(buildScreeningSyncProgress(status), report)
+				return status, stateErr
+			}
 			screeningSyncLog.Debug(
 				"no new bars for symbol: symbol=%s target=%s localLatest=%s sourceBars=%d",
 				stock.Symbol,
@@ -459,11 +510,11 @@ func (s *ScreeningSyncService) SyncWithOptions(
 			status.ProgressPercent = calculateScreeningSyncPercent(status.CompletedStocks, len(stocks))
 			status.LastMessage = fmt.Sprintf("no new bars for %s", stock.Symbol)
 			s.appendStatusEvent(status, ScreeningSyncEvent{
-				Time:    formatScreeningStoreTime(s.now().UTC()),
-				Symbol:  stock.Symbol,
-				Name:    stock.Name,
-				Source:  status.ActiveSource,
-				Status:  "skip",
+				Time:   formatScreeningStoreTime(s.now().UTC()),
+				Symbol: stock.Symbol,
+				Name:   stock.Name,
+				Source: status.ActiveSource,
+				Status: "skip",
 				Message: fmt.Sprintf(
 					"no new bars for %s: target=%s localLatest=%s sourceBars=%d",
 					stock.Symbol,
@@ -472,6 +523,25 @@ func (s *ScreeningSyncService) SyncWithOptions(
 					len(bars),
 				),
 			})
+			if syncState.Excluded {
+				status.LastMessage = fmt.Sprintf("excluded stale symbol %s", stock.Symbol)
+				s.appendStatusEvent(status, ScreeningSyncEvent{
+					Time:   formatScreeningStoreTime(s.now().UTC()),
+					Symbol: stock.Symbol,
+					Name:   stock.Name,
+					Source: status.ActiveSource,
+					Status: "excluded",
+					Message: fmt.Sprintf(
+						"excluded stale symbol %s after %d no-new runs: sourceLatest=%s localLatest=%s target=%s lag=%d",
+						stock.Symbol,
+						syncState.NoNewStreak,
+						sourceLatestTradeDate,
+						latestLocalTradeDates[stock.Symbol],
+						targetTradeDate,
+						tradeDateLag,
+					),
+				})
+			}
 			s.persistScreeningSyncJobState(scopeKey, options, status, &ScreeningSyncJobState{
 				CurrentIndex:        idx + 1,
 				CompletedStocks:     status.CompletedStocks,
@@ -514,6 +584,18 @@ func (s *ScreeningSyncService) SyncWithOptions(
 
 		lastBar := filteredBars[len(filteredBars)-1]
 		lastBarDate := normalizeTradeDate(lastBar.Time)
+		if err := s.clearStaleSyncSymbolState(syncSymbolStates, stock.Symbol, lastBarDate, sourceLatestTradeDate, targetTradeDate); err != nil {
+			status.RunStatus = string(ScreeningSyncRunStatusFailed)
+			status.CurrentStage = "failed"
+			status.Error = err.Error()
+			status.LastMessage = status.Error
+			s.persistScreeningSyncJobState(scopeKey, options, status, &ScreeningSyncJobState{
+				CurrentIndex:    idx,
+				CompletedStocks: status.CompletedStocks,
+			}, status.Error)
+			s.emitScreeningSyncProgress(buildScreeningSyncProgress(status), report)
+			return status, err
+		}
 		latestBars[stock.Symbol] = latestBarInfo{
 			tradeDate: lastBarDate,
 			bar:       lastBar,
@@ -526,11 +608,11 @@ func (s *ScreeningSyncService) SyncWithOptions(
 		status.ProgressPercent = calculateScreeningSyncPercent(status.CompletedStocks, len(stocks))
 		status.LastMessage = fmt.Sprintf("completed %d / %d", status.CompletedStocks, len(stocks))
 		s.appendStatusEvent(status, ScreeningSyncEvent{
-			Time:    formatScreeningStoreTime(s.now().UTC()),
-			Symbol:  stock.Symbol,
-			Name:    stock.Name,
-			Source:  status.ActiveSource,
-			Status:  "stored",
+			Time:   formatScreeningStoreTime(s.now().UTC()),
+			Symbol: stock.Symbol,
+			Name:   stock.Name,
+			Source: status.ActiveSource,
+			Status: "stored",
 			Message: fmt.Sprintf(
 				"stored %d bars for %s: latest=%s completed=%d/%d",
 				len(filteredBars),
@@ -1007,6 +1089,30 @@ func filterScreeningStocksBySymbols(stocks []ScreeningStockBasic, symbols []stri
 	return filtered
 }
 
+func filterScreeningStocksExcludingSymbols(stocks []ScreeningStockBasic, symbols []string) []ScreeningStockBasic {
+	if len(stocks) == 0 || len(symbols) == 0 {
+		return append([]ScreeningStockBasic(nil), stocks...)
+	}
+
+	symbolSet := make(map[string]struct{}, len(symbols))
+	for _, symbol := range symbols {
+		trimmed := strings.TrimSpace(symbol)
+		if trimmed == "" {
+			continue
+		}
+		symbolSet[trimmed] = struct{}{}
+	}
+
+	filtered := make([]ScreeningStockBasic, 0, len(stocks))
+	for _, stock := range stocks {
+		if _, excluded := symbolSet[stock.Symbol]; excluded {
+			continue
+		}
+		filtered = append(filtered, stock)
+	}
+	return filtered
+}
+
 func filterBarsForSync(bars []models.KLineData, lastTradeDate string, initialSyncDays int) []models.KLineData {
 	if len(bars) == 0 {
 		return nil
@@ -1031,6 +1137,17 @@ func filterBarsForSync(bars []models.KLineData, lastTradeDate string, initialSyn
 		}
 	}
 	return result
+}
+
+func latestTradeDateFromBars(bars []models.KLineData) string {
+	latestTradeDate := ""
+	for _, bar := range bars {
+		tradeDate := normalizeTradeDate(bar.Time)
+		if tradeDate > latestTradeDate {
+			latestTradeDate = tradeDate
+		}
+	}
+	return latestTradeDate
 }
 
 func deriveSnapshotsForBars(allBars []models.KLineData, selectedBars []models.KLineData) []derivedSnapshot {
@@ -1086,6 +1203,114 @@ func normalizeTradeDate(raw string) string {
 		return raw[:10]
 	}
 	return raw
+}
+
+func (s *ScreeningSyncService) recordStaleSyncSymbolState(
+	states map[string]ScreeningSyncSymbolState,
+	symbol string,
+	localTradeDate string,
+	sourceTradeDate string,
+	targetTradeDate string,
+) (ScreeningSyncSymbolState, int, error) {
+	state := states[symbol]
+	state.Symbol = symbol
+	state.LastLocalTradeDate = localTradeDate
+	state.LastSourceTradeDate = sourceTradeDate
+	state.LastTargetTradeDate = targetTradeDate
+	state.UpdatedAt = s.now().UTC()
+
+	tradeDateLag := s.tradeDateLagBetween(sourceTradeDate, targetTradeDate)
+	isPersistentlyStale := sourceTradeDate != "" &&
+		targetTradeDate != "" &&
+		sourceTradeDate < targetTradeDate &&
+		(localTradeDate == "" || sourceTradeDate <= localTradeDate) &&
+		tradeDateLag >= screeningSyncTradeDateLagExclusionThreshold
+
+	if isPersistentlyStale {
+		state.NoNewStreak++
+	} else {
+		state.NoNewStreak = 0
+	}
+
+	if state.NoNewStreak >= screeningSyncNoNewStreakExclusionThreshold {
+		state.Excluded = true
+		state.ExcludeReason = screeningSyncExcludeReasonPersistentlyStale
+		if state.ExcludedAt == nil {
+			excludedAt := state.UpdatedAt
+			state.ExcludedAt = &excludedAt
+		}
+	} else if !state.Excluded {
+		state.ExcludeReason = ""
+		state.ExcludedAt = nil
+	}
+
+	if err := s.store.UpsertSyncSymbolState(state); err != nil {
+		return ScreeningSyncSymbolState{}, 0, err
+	}
+	states[symbol] = state
+	return state, tradeDateLag, nil
+}
+
+func (s *ScreeningSyncService) clearStaleSyncSymbolState(
+	states map[string]ScreeningSyncSymbolState,
+	symbol string,
+	localTradeDate string,
+	sourceTradeDate string,
+	targetTradeDate string,
+) error {
+	state := states[symbol]
+	if state.Symbol == "" {
+		state.Symbol = symbol
+	}
+	state.NoNewStreak = 0
+	state.LastLocalTradeDate = localTradeDate
+	state.LastSourceTradeDate = sourceTradeDate
+	state.LastTargetTradeDate = targetTradeDate
+	state.Excluded = false
+	state.ExcludeReason = ""
+	state.ExcludedAt = nil
+	state.UpdatedAt = s.now().UTC()
+	if err := s.store.UpsertSyncSymbolState(state); err != nil {
+		return err
+	}
+	states[symbol] = state
+	return nil
+}
+
+func (s *ScreeningSyncService) tradeDateLagBetween(sourceTradeDate string, targetTradeDate string) int {
+	sourceTradeDate = strings.TrimSpace(sourceTradeDate)
+	targetTradeDate = strings.TrimSpace(targetTradeDate)
+	if sourceTradeDate == "" || targetTradeDate == "" || sourceTradeDate >= targetTradeDate || s == nil || s.source == nil {
+		return 0
+	}
+	if provider, ok := s.source.(screeningTradeDateSource); ok {
+		tradeDates, err := provider.GetTradeDates(screeningSyncTradeDateLagLookbackWindow)
+		if err == nil {
+			lag := 0
+			for _, tradeDate := range tradeDates {
+				tradeDate = strings.TrimSpace(tradeDate)
+				if tradeDate == "" {
+					continue
+				}
+				if tradeDate <= targetTradeDate && tradeDate > sourceTradeDate {
+					lag++
+				}
+			}
+			if lag > 0 {
+				return lag
+			}
+		}
+	}
+
+	sourceDate, err := time.Parse("2006-01-02", sourceTradeDate)
+	if err != nil {
+		return 0
+	}
+	targetDate, err := time.Parse("2006-01-02", targetTradeDate)
+	if err != nil || !targetDate.After(sourceDate) {
+		return 0
+	}
+	return int(targetDate.Sub(sourceDate).Hours() / 24)
 }
 
 func boolToInt(value bool) int {
@@ -1457,6 +1682,10 @@ func (s *ScreeningSyncService) attachCoverageSummary(status *ScreeningSyncStatus
 		return
 	}
 	stocks = filterActiveScreeningStocks(stocks)
+	excludedSymbols, err := s.store.ListExcludedSyncSymbols(extractScreeningSyncSymbols(stocks))
+	if err == nil {
+		stocks = filterScreeningStocksExcludingSymbols(stocks, excludedSymbols)
+	}
 
 	symbols := extractScreeningSyncSymbols(stocks)
 	status.MarketStockCount = len(symbols)

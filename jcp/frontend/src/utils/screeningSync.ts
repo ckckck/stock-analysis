@@ -14,7 +14,8 @@ export interface TopbarSyncButtonState {
 export interface ScreeningSyncDialogCopy {
   title: string;
   description: string;
-  confirmLabel: string;
+  primaryActionLabel: string;
+  secondaryActionLabel?: string;
 }
 
 export interface ScreeningPrimaryActionLabelOptions {
@@ -29,6 +30,20 @@ export interface ScreeningSyncCoverageStats {
   syncedProgressLabel: string;
   pendingSyncLabel: string;
   marketStockCountLabel: string;
+}
+
+export interface SyncOnlyMinimizedCardState {
+  visible: boolean;
+  title: string;
+  progressPercent: number;
+  progressLabel: string;
+  detail: string;
+}
+
+export interface SyncDialogHeaderControls {
+  showMinimize: boolean;
+  minimizeDisabled: boolean;
+  closeDisabled: boolean;
 }
 
 export const mergeScreeningSyncProgress = (
@@ -233,16 +248,64 @@ export const resolveSyncDialogCopy = (mode: ScreeningSyncDialogMode): ScreeningS
     return {
       title: '确认后开始同步',
       description: '本次会按当前设置同步本地数据库，不会触发 AI 筛选。',
-      confirmLabel: '开始同步',
+      primaryActionLabel: '开始同步',
     };
   }
 
   return {
-    title: '确认同步后开始筛选',
-    description: '本次会先按当前设置同步本地数据库，再基于最新数据执行 AI 筛选。',
-    confirmLabel: '开始同步并筛选',
+    title: '确认后开始筛选',
+    description: '本次会直接基于当前已同步数据执行 AI 筛选。',
+    primaryActionLabel: '开始筛选',
   };
 };
+
+export const resolveSyncOnlyMinimizedCardState = (input: {
+  visible: boolean;
+  minimized: boolean;
+  loading: boolean;
+  syncStatus: Pick<ScreeningSyncStatus, 'runStatus' | 'progressPercent' | 'completedStocks' | 'totalStocks' | 'lastMessage'> | null;
+}): SyncOnlyMinimizedCardState => {
+  if (!input.visible || !input.minimized) {
+    return {
+      visible: false,
+      title: '',
+      progressPercent: 0,
+      progressLabel: '-- / --',
+      detail: '',
+    };
+  }
+
+  const runStatus = (input.syncStatus?.runStatus || '').toLowerCase();
+  let title = '同步进行中';
+  if (!input.loading) {
+    if (runStatus === 'completed') {
+      title = '同步已完成';
+    } else if (runStatus === 'failed') {
+      title = '同步失败';
+    } else if (runStatus === 'canceled') {
+      title = '同步已取消';
+    }
+  }
+
+  const completedStocks = input.syncStatus?.completedStocks ?? 0;
+  const totalStocks = input.syncStatus?.totalStocks;
+  return {
+    visible: true,
+    title,
+    progressPercent: Math.max(0, Math.min(100, Math.round(input.syncStatus?.progressPercent ?? 0))),
+    progressLabel: `${completedStocks} / ${totalStocks ?? '--'}`,
+    detail: input.syncStatus?.lastMessage || '',
+  };
+};
+
+export const resolveSyncDialogHeaderControls = (input: {
+  minimizable: boolean;
+  loading: boolean;
+}): SyncDialogHeaderControls => ({
+  showMinimize: input.minimizable,
+  minimizeDisabled: !input.minimizable,
+  closeDisabled: input.loading,
+});
 
 export const resolveScreeningPrimaryActionLabel = ({
   loading,

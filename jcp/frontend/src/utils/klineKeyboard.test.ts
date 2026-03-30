@@ -70,10 +70,17 @@ describe('shouldFocusKeyboardHostOnPointerDown', () => {
       tagName: 'div',
       isContentEditable: false,
     })).toBe(true);
+  });
+
+  it('does not focus the keyboard host after clicking interactive controls', () => {
     expect(shouldFocusKeyboardHostOnPointerDown({
       tagName: 'button',
       isContentEditable: false,
-    })).toBe(true);
+    })).toBe(false);
+    expect(shouldFocusKeyboardHostOnPointerDown({
+      tagName: 'a',
+      isContentEditable: false,
+    })).toBe(false);
   });
 
   it('does not focus the keyboard host after clicking editable areas', () => {

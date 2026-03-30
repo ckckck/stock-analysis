@@ -45,16 +45,17 @@
 3. 顶部栏入口会先根据本地同步状态显示三种视觉状态：全部完成时显示绿色“已同步”并禁用；部分完成时主文案仍是黄色“立即同步”，但右侧数字会优先显示当前已完成股票数 `(n/总数)`；未同步时显示红色“立即同步 (0/总数)” 或 `(--/--)`。如果用户在同步过程中取消，只有“同一测试范围且确实存在断点”的下一次运行才会继续沿用已完成数；一旦切换成新的范围，前端会把 `completedStocks`、`progressPercent` 和旧事件列表全部清零，避免把上一次失败任务的覆盖率误当成新一轮同步进度，见 `jcp/frontend/src/utils/screeningSync.ts:96`。
 4. 点击“立即同步”后，前端调用 `RunScreeningSync({ mode, limitStocks })`；若勾选测试上限，只会处理前 N 只股票，未勾选则按完整市场范围执行。后端会先写基础股票列表，再按 `sync_state` 判断是首次窗口同步还是按最近交易日增量补齐，见 `jcp/app.go:373`、`jcp/internal/services/screening_sync_service.go:144`、`jcp/internal/services/screening_sync_service.go:194`。
 5. 同步候选会先排除 `is_active = false` 的股票，因此退市/终止上市个股不会再进入后续同步队列；它们旧的历史日线仍可留在库里，但不会继续追最新交易日。
-6. 日线同步取数顺序是 `Baostock -> 新 Sina 日线接口`。如果 `Baostock` 登录、查询或返回空数据失败，才会回退到 `money.finance.sina.com.cn` 的日线接口；`Baostock` 遇到空成交量/空成交额时会按 0 处理，不再因为空字符串直接报错。
-7. 无论来自设置页还是顶部栏，同步过程中状态卡都会显示百分比、已完成股票数、当前股票、当前数据源和最近事件；最近事件现在除了数据源切换外，还会额外记录 `queue`、`fetch`、`skip`、`stored` 和 `error` 五类诊断消息，并把 `target`、`localLatest`、`lookback`、`sourceBars`、`completed` 这类字段写进消息体，方便直接判断是断点续传、无增量数据还是取数失败。单只股票失败时会记一条 `error` 事件后继续跑后面的股票，不再整轮中断，见 `jcp/internal/services/screening_sync_service.go:384`、`jcp/internal/services/screening_sync_service.go:419`、`jcp/internal/services/screening_sync_service.go:460`、`jcp/internal/services/screening_sync_service.go:527`。
-8. 点击“取消”后，本轮会在当前股票处理完成后停下，并把断点写入 `sync_jobs`；下次手动或自动同步都从该断点继续，但新的同步范围不会继承旧事件列表，见 `jcp/app.go:397`、`jcp/internal/services/screening_store.go:118`、`jcp/internal/services/screening_sync_service.go:267`、`jcp/internal/services/screening_sync_service.go:946`。
+6. 若某只股票连续 3 次同步都出现 `no new bars`，并且本次数据源返回的最新交易日仍至少落后目标交易日 20 个交易日，同步服务会把它写入本地 `sync_symbol_states` 排除名单。之后它既不会再进入后续同步队列，也不会继续计入顶部同步覆盖率 `(已同步/总数)` 的总数。
+7. 日线同步取数顺序是 `Baostock -> 新 Sina 日线接口`。如果 `Baostock` 登录、查询或返回空数据失败，才会回退到 `money.finance.sina.com.cn` 的日线接口；`Baostock` 遇到空成交量/空成交额时会按 0 处理，不再因为空字符串直接报错。
+8. 无论来自设置页还是顶部栏，同步过程中状态卡都会显示百分比、已完成股票数、当前股票、当前数据源和最近事件；最近事件现在除了数据源切换外，还会额外记录 `queue`、`fetch`、`skip`、`stored`、`error` 和 `excluded` 六类诊断消息，并把 `target`、`localLatest`、`lookback`、`sourceBars`、`completed` 这类字段写进消息体，方便直接判断是断点续传、无增量数据、单票失败，还是因为长期无新增而被排除。
+9. 点击“取消”后，本轮会在当前股票处理完成后停下，并把断点写入 `sync_jobs`；下次手动或自动同步都从该断点继续，但新的同步范围不会继承旧事件列表，见 `jcp/app.go:397`、`jcp/internal/services/screening_store.go:118`、`jcp/internal/services/screening_sync_service.go:267`、`jcp/internal/services/screening_sync_service.go:946`。
 
 ## 首次从欢迎页同步并继续 AI 筛选
 
 1. 欢迎页现在既会在“完全空白状态”下自动出现，也可以通过顶部模式切换里的 `首页` 随时主动进入；若首次直接输入自然语言筛选，不会立刻执行，而是先弹统一确认弹框。若当前本地已经有自选或筛选数据，欢迎页顶部还会额外给出“进入自选 / 进入 AI 筛选”两个快捷入口，避免进入首页后失去返回路径。
 2. 这个确认弹框现在来自一套通用同步弹框：欢迎页和主工作区使用 `screening` 模式，顶部栏同步按钮使用 `sync-only` 模式。两种模式都共用“当前同步策略”“当前数据状态”和同步进度卡，且标题说明区统一左对齐；只有 `screening` 模式额外展示“本次筛选条件”和一次性的“测试范围”面板，决定本次是否只同步并筛选前 N 只股票。真正开始同步后，同一弹框会继续显示实时同步卡，包含百分比、当前股票、当前数据源、当前阶段和最近同步日志，见 `jcp/frontend/src/utils/screeningSync.ts:162`、`jcp/frontend/src/App.tsx:1527`。
 3. 用户点击确认后，前端现在始终会先触发一次手动同步，再继续本次 AI 筛选；若勾选“只同步并筛选前 N 只股票”，同步完成后优先复用本次返回的 `syncedSymbols`，若返回值缺失，则额外调用 `GetScreeningUniverseSymbols(limit)` 从本地 SQLite 里读取当前可查询股票池的前 N 只 symbol，再把该子集继续传给 AI 筛选请求，见 `jcp/frontend/src/App.tsx`、`jcp/app.go`、`jcp/internal/services/screening_store.go`。
-4. 后端在执行这类测试筛选时，会在同一条 SQLite 连接上创建临时 `screening_scope` 表，并额外用同名 TEMP VIEW 覆盖 `stocks_basic`、`daily_bars`、`daily_snapshots` 和 `v_stock_latest_daily`；同时基础 `v_stock_latest_daily` 和筛选 universe 本身也会排除 `is_active = false` 的股票，因此即使旧库里还残留退市股票的历史日线，它们也不会再进入新的筛选结果，见 `jcp/internal/services/screening_store.go:207`、`jcp/internal/services/screening_store.go:648`、`jcp/internal/services/screening_query_service.go`。
+4. 后端在执行这类测试筛选时，会在同一条 SQLite 连接上创建临时 `screening_scope` 表，并额外用同名 TEMP VIEW 覆盖 `stocks_basic`、`daily_bars`、`daily_snapshots` 和 `v_stock_latest_daily`；同时基础 `v_stock_latest_daily` 和筛选 universe 本身也会排除 `is_active = false` 的股票，以及已被本地 `sync_symbol_states` 标记为长期无新增的 symbol，因此即使旧库里还残留退市股票或长期无新增股票的历史日线，它们也不会再进入新的测试股票池，见 `jcp/internal/services/screening_store.go`、`jcp/internal/services/screening_query_service.go`。
 
 ## 执行一次 AI 筛选并回放历史
 

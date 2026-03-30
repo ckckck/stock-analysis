@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/run-bigpig/jcp/internal/logger"
 	"github.com/run-bigpig/jcp/internal/models"
 )
 
@@ -18,13 +19,56 @@ var (
 	screeningLimitPattern        = regexp.MustCompile(`(?is)\bLIMIT\s+\d+\b`)
 	screeningSourcePattern       = regexp.MustCompile(`(?is)\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)`)
 	screeningCTEPattern          = regexp.MustCompile(`(?is)(?:WITH|,)\s*([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(`)
+	screeningSQLLiteralReplacer  = strings.NewReplacer(
+		"'SH'", "'上海'",
+		"'sh'", "'上海'",
+		`"SH"`, `"上海"`,
+		`"sh"`, `"上海"`,
+		"'SZ'", "'深圳'",
+		"'sz'", "'深圳'",
+		`"SZ"`, `"深圳"`,
+		`"sz"`, `"深圳"`,
+		"'BJ'", "'北京'",
+		"'bj'", "'北京'",
+		`"BJ"`, `"北京"`,
+		`"bj"`, `"北京"`,
+		"'沪市'", "'上海'",
+		`"沪市"`, `"上海"`,
+		"'深市'", "'深圳'",
+		`"深市"`, `"深圳"`,
+		"'北交所'", "'北京'",
+		`"北交所"`, `"北京"`,
+		"'上交所'", "'上海'",
+		`"上交所"`, `"上海"`,
+		"'深交所'", "'深圳'",
+		`"深交所"`, `"深圳"`,
+		"'北京证券交易所'", "'北京'",
+		`"北京证券交易所"`, `"北京"`,
+		"'上海证券交易所'", "'上海'",
+		`"上海证券交易所"`, `"上海"`,
+		"'深圳证券交易所'", "'深圳'",
+		`"深圳证券交易所"`, `"深圳"`,
+	)
 )
+
+var screeningQueryLog = logger.New("screening.query")
 
 var screeningAllowedSources = map[string]struct{}{
 	"stocks_basic":         {},
 	"daily_bars":           {},
 	"daily_snapshots":      {},
 	"v_stock_latest_daily": {},
+}
+
+var screeningAllowedOrderByColumns = map[string]struct{}{
+	"symbol":             {},
+	"name":               {},
+	"score":              {},
+	"snapshot_trade_date": {},
+	"price":              {},
+	"change_percent":     {},
+	"volume":             {},
+	"amount":             {},
 }
 
 type ScreeningResultMode string
@@ -285,6 +329,13 @@ func (s *ScreeningQueryService) RunWithProgress(
 	emitProgress("validate_sql", 45, "正在校验 SQL", nil)
 	validSQL, err := validateScreeningSQL(rawSQL, req.ResultMode, resultLimit, len(universeSymbols) > 0)
 	if err != nil {
+		screeningQueryLog.Error(
+			"validate screening sql failed: mode=%s limit=%d err=%v rawSQL=%s",
+			req.ResultMode,
+			resultLimit,
+			err,
+			summarizeScreeningSQLForLog(rawSQL),
+		)
 		emitProgress("validate_sql", 45, "SQL 校验失败", err)
 		return nil, err
 	}
@@ -325,6 +376,14 @@ func (s *ScreeningQueryService) RunWithProgress(
 		totalCount = len(allResults)
 	}
 	if err != nil {
+		screeningQueryLog.Error(
+			"run screening query failed: prompt=%q mode=%s limit=%d err=%v sql=%s",
+			req.Prompt,
+			req.ResultMode,
+			resultLimit,
+			err,
+			summarizeScreeningSQLForLog(validSQL),
+		)
 		emitProgress("execute_query", 65, "筛选查询执行失败", err)
 		return nil, err
 	}
@@ -473,6 +532,14 @@ func (s *ScreeningQueryService) RerunHistoryRunWithUniverseWithContext(
 	emitProgress("prepare", 10, "准备根据历史 SQL 重新筛选", nil)
 	validSQL, err := validateScreeningSQL(run.GeneratedSQL, ScreeningResultMode(run.ResultMode), run.ResultLimit, len(universeSymbols) > 0)
 	if err != nil {
+		screeningQueryLog.Error(
+			"validate history screening sql failed: runID=%d mode=%s limit=%d err=%v sql=%s",
+			runID,
+			run.ResultMode,
+			run.ResultLimit,
+			err,
+			summarizeScreeningSQLForLog(run.GeneratedSQL),
+		)
 		emitProgress("validate_sql", 30, "历史 SQL 校验失败", err)
 		return nil, err
 	}
@@ -517,6 +584,15 @@ func (s *ScreeningQueryService) RerunHistoryRunWithUniverseWithContext(
 		totalCount = len(allResults)
 	}
 	if err != nil {
+		screeningQueryLog.Error(
+			"rerun screening history failed: runID=%d prompt=%q mode=%s limit=%d err=%v sql=%s",
+			runID,
+			run.Prompt,
+			run.ResultMode,
+			run.ResultLimit,
+			err,
+			summarizeScreeningSQLForLog(validSQL),
+		)
 		emitProgress("execute_query", 60, "历史 SQL 执行失败", err)
 		return nil, err
 	}
@@ -659,6 +735,10 @@ func (s *ScreeningQueryService) buildPrompt(req ScreeningQueryRequest) string {
 	builder.WriteString("- stocks_basic(symbol, name, market, industry, list_date, is_st, is_active)\n")
 	builder.WriteString("- daily_bars(symbol, trade_date, open, high, low, close, volume, amount)\n")
 	builder.WriteString("- daily_snapshots(symbol, trade_date, change, change_percent, amplitude, turnover_rate, price)\n\n")
+	builder.WriteString("## 字段取值约束\n")
+	builder.WriteString("- market 字段的实际取值固定为：上海、深圳、北京。\n")
+	builder.WriteString("- 如果要按市场过滤，只能使用这些实际值。\n")
+	builder.WriteString("- 不要写成 SH、SZ、BJ，也不要写成 沪市、深市、北交所、上交所、深交所。\n\n")
 
 	builder.WriteString("## 语义解析规则\n")
 	builder.WriteString("- 最近N天一律指最近 N 个交易日，不是自然日。\n")
@@ -735,10 +815,22 @@ type screeningQueryExecutor interface {
 }
 
 func (s *ScreeningQueryService) countMatches(ctx context.Context, runner screeningQueryExecutor, sqlText string) (int, error) {
-	row := runner.QueryRowContext(ctx, `SELECT COUNT(1) FROM (`+sqlText+`) AS screening_candidates`)
+	countSQL, err := buildScreeningCountSQL(sqlText)
+	if err != nil {
+		screeningQueryLog.Error("build screening count sql failed: err=%v sql=%s", err, summarizeScreeningSQLForLog(sqlText))
+		return 0, err
+	}
+
+	row := runner.QueryRowContext(ctx, countSQL)
 
 	var count int
 	if err := row.Scan(&count); err != nil {
+		screeningQueryLog.Error(
+			"count screening results failed: err=%v sql=%s countSQL=%s",
+			err,
+			summarizeScreeningSQLForLog(sqlText),
+			summarizeScreeningSQLForLog(countSQL),
+		)
 		return 0, fmt.Errorf("count screening results: %w", err)
 	}
 	return count, nil
@@ -747,6 +839,7 @@ func (s *ScreeningQueryService) countMatches(ctx context.Context, runner screeni
 func (s *ScreeningQueryService) queryResults(ctx context.Context, runner screeningQueryExecutor, sqlText string) ([]ScreeningRunResult, error) {
 	rows, err := runner.QueryContext(ctx, sqlText)
 	if err != nil {
+		screeningQueryLog.Error("query screening results failed: err=%v sql=%s", err, summarizeScreeningSQLForLog(sqlText))
 		return nil, fmt.Errorf("query screening results: %w", err)
 	}
 	defer rows.Close()
@@ -809,6 +902,9 @@ func validateScreeningSQL(rawSQL string, mode ScreeningResultMode, resultLimit i
 	if !screeningOrderByPattern.MatchString(sqlText) {
 		return "", fmt.Errorf("screening sql must include ORDER BY")
 	}
+	if err := validateScreeningOrderByClause(sqlText); err != nil {
+		return "", err
+	}
 
 	switch mode {
 	case ScreeningResultModeTopN:
@@ -855,6 +951,14 @@ func validateScreeningSQL(rawSQL string, mode ScreeningResultMode, resultLimit i
 	return sqlText, nil
 }
 
+func buildScreeningCountSQL(sqlText string) (string, error) {
+	countSource, _, err := stripOutermostOrderByClause(sqlText)
+	if err != nil {
+		return "", err
+	}
+	return `SELECT COUNT(1) FROM (` + countSource + `) AS screening_candidates`, nil
+}
+
 func normalizeScreeningSQL(rawSQL string) string {
 	trimmed := strings.TrimSpace(rawSQL)
 	if strings.HasPrefix(trimmed, "```") {
@@ -863,7 +967,284 @@ func normalizeScreeningSQL(rawSQL string) string {
 			trimmed = strings.Join(lines[1:len(lines)-1], "\n")
 		}
 	}
-	return strings.TrimSpace(strings.TrimSuffix(trimmed, ";"))
+	trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, ";"))
+	return screeningSQLLiteralReplacer.Replace(trimmed)
+}
+
+func validateScreeningOrderByClause(sqlText string) error {
+	clause, found, err := extractTopLevelOrderByClause(sqlText)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+
+	for _, term := range splitSQLTopLevelCSV(clause) {
+		expr := normalizeScreeningOrderByExpr(term)
+		if expr == "" {
+			return fmt.Errorf("screening sql ORDER BY contains empty expression")
+		}
+		if _, ok := screeningAllowedOrderByColumns[expr]; !ok {
+			return fmt.Errorf("screening sql ORDER BY can only use final output columns or aliases")
+		}
+	}
+	return nil
+}
+
+func extractTopLevelOrderByClause(sqlText string) (string, bool, error) {
+	_, orderByEnd, found, err := findTopLevelOrderBy(sqlText)
+	if err != nil || !found {
+		return "", found, err
+	}
+
+	limitStart, _, limitFound, err := findTopLevelKeyword(sqlText, orderByEnd, "LIMIT")
+	if err != nil {
+		return "", false, err
+	}
+	end := len(sqlText)
+	if limitFound {
+		end = limitStart
+	}
+	return strings.TrimSpace(sqlText[orderByEnd:end]), true, nil
+}
+
+func stripOutermostOrderByClause(sqlText string) (string, bool, error) {
+	orderStart, _, found, err := findTopLevelOrderBy(sqlText)
+	if err != nil || !found {
+		return strings.TrimSpace(sqlText), found, err
+	}
+
+	limitStart, _, limitFound, err := findTopLevelKeyword(sqlText, orderStart, "LIMIT")
+	if err != nil {
+		return "", false, err
+	}
+
+	if limitFound {
+		return strings.TrimSpace(sqlText[:orderStart] + " " + sqlText[limitStart:]), true, nil
+	}
+	return strings.TrimSpace(sqlText[:orderStart]), true, nil
+}
+
+func findTopLevelOrderBy(sqlText string) (int, int, bool, error) {
+	depth := 0
+	inSingle := false
+	inDouble := false
+	inBacktick := false
+	upper := strings.ToUpper(sqlText)
+	lastStart := -1
+	lastEnd := -1
+
+	for i := 0; i < len(upper); i++ {
+		ch := upper[i]
+		switch ch {
+		case '\'':
+			if !inDouble && !inBacktick {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle && !inBacktick {
+				inDouble = !inDouble
+			}
+		case '`':
+			if !inSingle && !inDouble {
+				inBacktick = !inBacktick
+			}
+		}
+		if inSingle || inDouble || inBacktick {
+			continue
+		}
+		switch ch {
+		case '(':
+			depth++
+			continue
+		case ')':
+			depth--
+			if depth < 0 {
+				return 0, 0, false, fmt.Errorf("screening sql has unbalanced parentheses")
+			}
+			continue
+		}
+		if depth != 0 {
+			continue
+		}
+		if isSQLWordAt(upper, i, "ORDER") {
+			j := i + len("ORDER")
+			for j < len(upper) && isSQLWhitespace(upper[j]) {
+				j++
+			}
+			if isSQLWordAt(upper, j, "BY") {
+				lastStart = i
+				lastEnd = j + len("BY")
+				i = lastEnd - 1
+			}
+		}
+	}
+
+	if depth != 0 || inSingle || inDouble || inBacktick {
+		return 0, 0, false, fmt.Errorf("screening sql has unterminated clause")
+	}
+	if lastStart < 0 {
+		return 0, 0, false, nil
+	}
+	return lastStart, lastEnd, true, nil
+}
+
+func findTopLevelKeyword(sqlText string, start int, keyword string) (int, int, bool, error) {
+	if start < 0 {
+		start = 0
+	}
+	depth := 0
+	inSingle := false
+	inDouble := false
+	inBacktick := false
+	upper := strings.ToUpper(sqlText)
+
+	for i := start; i < len(upper); i++ {
+		ch := upper[i]
+		switch ch {
+		case '\'':
+			if !inDouble && !inBacktick {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle && !inBacktick {
+				inDouble = !inDouble
+			}
+		case '`':
+			if !inSingle && !inDouble {
+				inBacktick = !inBacktick
+			}
+		}
+		if inSingle || inDouble || inBacktick {
+			continue
+		}
+		switch ch {
+		case '(':
+			depth++
+			continue
+		case ')':
+			depth--
+			if depth < 0 {
+				return 0, 0, false, fmt.Errorf("screening sql has unbalanced parentheses")
+			}
+			continue
+		}
+		if depth != 0 {
+			continue
+		}
+		if isSQLWordAt(upper, i, keyword) {
+			return i, i + len(keyword), true, nil
+		}
+	}
+
+	if depth != 0 || inSingle || inDouble || inBacktick {
+		return 0, 0, false, fmt.Errorf("screening sql has unterminated clause")
+	}
+	return 0, 0, false, nil
+}
+
+func splitSQLTopLevelCSV(input string) []string {
+	parts := make([]string, 0, 4)
+	start := 0
+	depth := 0
+	inSingle := false
+	inDouble := false
+	inBacktick := false
+
+	for i := 0; i < len(input); i++ {
+		ch := input[i]
+		switch ch {
+		case '\'':
+			if !inDouble && !inBacktick {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle && !inBacktick {
+				inDouble = !inDouble
+			}
+		case '`':
+			if !inSingle && !inDouble {
+				inBacktick = !inBacktick
+			}
+		}
+		if inSingle || inDouble || inBacktick {
+			continue
+		}
+		switch ch {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, strings.TrimSpace(input[start:i]))
+				start = i + 1
+			}
+		}
+	}
+
+	parts = append(parts, strings.TrimSpace(input[start:]))
+	return parts
+}
+
+func normalizeScreeningOrderByExpr(term string) string {
+	fields := strings.Fields(strings.TrimSpace(term))
+	if len(fields) == 0 {
+		return ""
+	}
+	expr := strings.Trim(fields[0], "`\"[]")
+	if idx := strings.LastIndex(expr, "."); idx >= 0 {
+		expr = expr[idx+1:]
+	}
+	expr = strings.Trim(expr, "`\"[]")
+	if expr == "" {
+		return ""
+	}
+	if strings.ContainsAny(expr, "()*/+-") {
+		return ""
+	}
+	return strings.ToLower(expr)
+}
+
+func summarizeScreeningSQLForLog(sqlText string) string {
+	normalized := strings.Join(strings.Fields(sqlText), " ")
+	if len(normalized) > 400 {
+		return normalized[:400] + "...(truncated)"
+	}
+	return normalized
+}
+
+func isSQLWordAt(upper string, index int, word string) bool {
+	if index < 0 || index+len(word) > len(upper) {
+		return false
+	}
+	if upper[index:index+len(word)] != word {
+		return false
+	}
+	if index > 0 {
+		prev := upper[index-1]
+		if isSQLIdentChar(prev) {
+			return false
+		}
+	}
+	if end := index + len(word); end < len(upper) {
+		next := upper[end]
+		if isSQLIdentChar(next) {
+			return false
+		}
+	}
+	return true
+}
+
+func isSQLIdentChar(ch byte) bool {
+	return (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_'
+}
+
+func isSQLWhitespace(ch byte) bool {
+	return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t'
 }
 
 func matchScreeningColumns(columns []string) bool {

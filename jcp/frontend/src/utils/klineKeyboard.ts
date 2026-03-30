@@ -40,6 +40,15 @@ export const isEditableTarget = (target: KlineKeyboardEventLike['target']): bool
   );
 };
 
+const isInteractivePointerTarget = (target: KlineKeyboardEventLike['target']): boolean => {
+  const tagName = (target?.tagName || '').toUpperCase();
+  return (
+    tagName === 'BUTTON' ||
+    tagName === 'A' ||
+    tagName === 'SUMMARY'
+  );
+};
+
 export const resolveKlineKeyboardAction = (
   event: KlineKeyboardEventLike,
 ): KlineKeyboardAction | null => {
@@ -76,7 +85,7 @@ export const shouldBlurActiveEditableOnPointerDown = ({
 
 export const shouldFocusKeyboardHostOnPointerDown = (
   pointerTarget?: KlineKeyboardEventLike['target'],
-): boolean => !isEditableTarget(pointerTarget);
+): boolean => !isEditableTarget(pointerTarget) && !isInteractivePointerTarget(pointerTarget);
 
 export const getKlinePointerInteractionOptions = (_period: string): {
   handleScroll: boolean;

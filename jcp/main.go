@@ -30,12 +30,20 @@ func main() {
 	app := NewApp()
 
 	// Create application with options
-	err := wails.Run(&options.App{
+	err := wails.Run(buildAppOptions(app))
+	if err != nil {
+		println("Error:", err.Error())
+	}
+}
+
+func buildAppOptions(app *App) *options.App {
+	return &options.App{
 		Title:           "散牛盘",
 		Width:           1920,
 		Height:          1080,
 		MinWidth:        1366,
 		MinHeight:       768,
+		WindowStartState: options.Maximised,
 		Frameless:       true,
 		CSSDragProperty: "--wails-draggable",
 		CSSDragValue:    "drag",
@@ -48,10 +56,6 @@ func main() {
 		Bind: []interface{}{
 			app,
 		},
-	})
-
-	if err != nil {
-		println("Error:", err.Error())
 	}
 }
 

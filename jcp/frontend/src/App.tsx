@@ -45,6 +45,8 @@ import {
   mergeScreeningSyncProgress,
   resolveScreeningSyncCoverageStats,
   resolveScreeningPresetFromResult,
+  resolveSyncDialogHeaderControls,
+  resolveSyncOnlyMinimizedCardState,
   resolveSyncDialogCopy,
   resolveTopbarSyncButtonState,
   shouldContinueAfterScreeningSync,
@@ -182,6 +184,7 @@ const App: React.FC = () => {
   const [welcomeSyncError, setWelcomeSyncError] = useState('');
   const [syncOnlyDialogVisible, setSyncOnlyDialogVisible] = useState(false);
   const [syncOnlySyncStarted, setSyncOnlySyncStarted] = useState(false);
+  const [syncOnlyDialogMinimized, setSyncOnlyDialogMinimized] = useState(false);
   const [syncOnlyLoading, setSyncOnlyLoading] = useState(false);
   const [syncOnlyError, setSyncOnlyError] = useState('');
   const [welcomeSyncTestMode, setWelcomeSyncTestMode] = useState(false);
@@ -294,6 +297,15 @@ const App: React.FC = () => {
   const topbarSyncButtonState = useMemo(
     () => resolveTopbarSyncButtonState(screeningSyncStatus),
     [screeningSyncStatus],
+  );
+  const syncOnlyMinimizedCardState = useMemo(
+    () => resolveSyncOnlyMinimizedCardState({
+      visible: syncOnlyDialogVisible,
+      minimized: syncOnlyDialogMinimized,
+      loading: syncOnlyLoading,
+      syncStatus: screeningSyncStatus,
+    }),
+    [screeningSyncStatus, syncOnlyDialogMinimized, syncOnlyDialogVisible, syncOnlyLoading],
   );
 
   const currentScreeningResultMode = useMemo<ScreeningResultMode>(
@@ -469,17 +481,31 @@ const App: React.FC = () => {
 
   const handleOpenSyncOnlyDialog = useCallback(() => {
     if (topbarSyncButtonState.disabled) return;
+    if (syncOnlyDialogVisible) {
+      setSyncOnlyDialogMinimized(false);
+      return;
+    }
     setSyncOnlyError('');
     resetScreeningSyncRunState();
     setSyncOnlySyncStarted(false);
+    setSyncOnlyDialogMinimized(false);
     setSyncOnlyDialogVisible(true);
-  }, [resetScreeningSyncRunState, topbarSyncButtonState.disabled]);
+  }, [resetScreeningSyncRunState, syncOnlyDialogVisible, topbarSyncButtonState.disabled]);
 
   const closeSyncOnlyDialog = useCallback(() => {
     if (syncOnlyLoading) return;
     setSyncOnlySyncStarted(false);
+    setSyncOnlyDialogMinimized(false);
     setSyncOnlyDialogVisible(false);
   }, [syncOnlyLoading]);
+
+  const handleMinimizeSyncOnlyDialog = useCallback(() => {
+    setSyncOnlyDialogMinimized(true);
+  }, []);
+
+  const handleRestoreSyncOnlyDialog = useCallback(() => {
+    setSyncOnlyDialogMinimized(false);
+  }, []);
 
   // 处理股票数据更新（来自后端推送）
   const handleStockUpdate = useCallback((stocks: Stock[]) => {
@@ -1129,7 +1155,7 @@ const App: React.FC = () => {
     openScreeningConfirm(screeningPrompt);
   }, [openScreeningConfirm, screeningPrompt]);
 
-  const handleWelcomeSyncAndContinue = useCallback(async () => {
+  const handleWelcomeSyncOnly = useCallback(async () => {
     const normalizedPrompt = pendingScreeningPrompt.trim();
     if (!normalizedPrompt) return;
 
@@ -1144,8 +1170,7 @@ const App: React.FC = () => {
       message: '准备启动同步任务...',
     }));
     try {
-      let universeSymbols: string[] | undefined;
-      console.debug('[screening-sync] start sync-and-screen', {
+      console.debug('[screening-sync] start screening-dialog sync-only', {
         limitStocks: welcomeSyncTestMode ? welcomeSyncTestLimit : 0,
         prompt: normalizedPrompt,
       });
@@ -1154,7 +1179,7 @@ const App: React.FC = () => {
         mode: 'manual',
         limitStocks: welcomeSyncTestMode ? welcomeSyncTestLimit : 0,
       });
-      console.debug('[screening-sync] sync-and-screen finished', {
+      console.debug('[screening-sync] screening-dialog sync-only finished', {
         runStatus: status.runStatus,
         completedStocks: status.completedStocks,
         totalStocks: status.totalStocks,
@@ -1173,24 +1198,9 @@ const App: React.FC = () => {
         );
         return;
       }
-      if (welcomeSyncTestMode) {
-        universeSymbols = status.syncedSymbols && status.syncedSymbols.length > 0
-          ? status.syncedSymbols
-          : await getScreeningUniverseSymbols(welcomeSyncTestLimit);
-      }
-
-      if (welcomeSyncTestMode && (!universeSymbols || universeSymbols.length === 0)) {
-        setWelcomeSyncError('测试范围已开启，但未获取到可用于 AI 筛选的股票范围');
-        return;
-      }
 
       setScreeningConfirmSyncStarted(false);
       setScreeningConfirmVisible(false);
-      if (canReuseHistorySql && screeningRerunBaseRunId) {
-        await executeHistoryRerun(screeningRerunBaseRunId, { universeSymbols });
-        return;
-      }
-      await executeScreening(normalizedPrompt, { universeSymbols });
     } catch (error) {
       setWelcomeSyncError(error instanceof Error ? error.message : '同步失败');
     } finally {
@@ -1199,10 +1209,48 @@ const App: React.FC = () => {
   }, [
     canReuseHistorySql,
     executeHistoryRerun,
-    executeScreening,
     pendingScreeningPrompt,
     refreshScreeningBootstrapState,
     screeningConfig,
+    welcomeSyncTestLimit,
+    welcomeSyncTestMode,
+  ]);
+
+  const handleWelcomeStartScreening = useCallback(async () => {
+    const normalizedPrompt = pendingScreeningPrompt.trim();
+    if (!normalizedPrompt) return;
+
+    setWelcomeSyncLoading(true);
+    setWelcomeSyncError('');
+
+    try {
+      let universeSymbols: string[] | undefined;
+      if (welcomeSyncTestMode) {
+        universeSymbols = await getScreeningUniverseSymbols(welcomeSyncTestLimit);
+        if (!universeSymbols || universeSymbols.length === 0) {
+          setWelcomeSyncError('测试范围已开启，但未获取到可用于 AI 筛选的股票范围');
+          return;
+        }
+      }
+
+      setScreeningConfirmSyncStarted(false);
+      setScreeningConfirmVisible(false);
+
+      if (canReuseHistorySql && screeningRerunBaseRunId) {
+        await executeHistoryRerun(screeningRerunBaseRunId, { universeSymbols });
+        return;
+      }
+      await executeScreening(normalizedPrompt, { universeSymbols });
+    } catch (error) {
+      setWelcomeSyncError(error instanceof Error ? error.message : '筛选失败');
+    } finally {
+      setWelcomeSyncLoading(false);
+    }
+  }, [
+    canReuseHistorySql,
+    executeHistoryRerun,
+    executeScreening,
+    pendingScreeningPrompt,
     screeningRerunBaseRunId,
     welcomeSyncTestLimit,
     welcomeSyncTestMode,
@@ -1278,14 +1326,16 @@ const App: React.FC = () => {
         setSyncOnlyError('同步已取消');
         return;
       }
-      setSyncOnlySyncStarted(false);
-      setSyncOnlyDialogVisible(false);
+      if (!syncOnlyDialogMinimized) {
+        setSyncOnlySyncStarted(false);
+        setSyncOnlyDialogVisible(false);
+      }
     } catch (error) {
       setSyncOnlyError(error instanceof Error ? error.message : '同步失败');
     } finally {
       setSyncOnlyLoading(false);
     }
-  }, [refreshScreeningBootstrapState, screeningConfig]);
+  }, [refreshScreeningBootstrapState, screeningConfig, syncOnlyDialogMinimized]);
 
   const handleCancelSyncOnly = useCallback(async () => {
     const isSyncRunning = syncOnlyLoading || screeningSyncStatus?.runStatus === 'running';
@@ -1500,7 +1550,8 @@ const App: React.FC = () => {
           onTestLimitChange={setWelcomeSyncTestLimit}
           onClose={closeScreeningConfirm}
           onCancelSync={() => { void handleCancelScreeningConfirm(); }}
-          onConfirm={() => { void handleWelcomeSyncAndContinue(); }}
+          onConfirm={() => { void handleWelcomeStartScreening(); }}
+          onSecondaryAction={() => { void handleWelcomeSyncOnly(); }}
           onOpenSyncSettings={handleOpenScreeningSettings}
         />
       </>
@@ -1908,12 +1959,13 @@ const App: React.FC = () => {
         onTestLimitChange={setWelcomeSyncTestLimit}
         onClose={closeScreeningConfirm}
         onCancelSync={() => { void handleCancelScreeningConfirm(); }}
-        onConfirm={() => { void handleWelcomeSyncAndContinue(); }}
+        onConfirm={() => { void handleWelcomeStartScreening(); }}
+        onSecondaryAction={() => { void handleWelcomeSyncOnly(); }}
         onOpenSyncSettings={handleOpenScreeningSettings}
       />
       <SyncActionDialog
         mode="sync-only"
-        visible={syncOnlyDialogVisible}
+        visible={syncOnlyDialogVisible && !syncOnlyDialogMinimized}
         syncStarted={syncOnlySyncStarted}
         syncSummary={screeningSummary}
         syncStatus={screeningSyncStatus}
@@ -1922,8 +1974,56 @@ const App: React.FC = () => {
         onClose={closeSyncOnlyDialog}
         onCancelSync={() => { void handleCancelSyncOnly(); }}
         onConfirm={() => { void handleStartSyncOnly(); }}
+        minimizable
+        onMinimize={handleMinimizeSyncOnlyDialog}
         onOpenSyncSettings={handleOpenScreeningSettings}
       />
+      {syncOnlyMinimizedCardState.visible && (
+        <div className={`fixed bottom-4 right-4 z-[125] w-[320px] rounded-2xl border shadow-2xl ${
+          colors.isDark ? 'border-slate-700 bg-slate-900/95' : 'border-slate-200 bg-white/95'
+        }`}>
+          <div className="flex items-start justify-between gap-3 px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <div className={`flex items-center gap-2 text-sm font-semibold ${colors.isDark ? 'text-slate-100' : 'text-slate-800'}`}>
+                {(syncOnlyLoading || screeningSyncStatus?.runStatus === 'running') && (
+                  <Loader2 className="h-4 w-4 animate-spin text-[var(--accent)]" />
+                )}
+                <span>{syncOnlyMinimizedCardState.title}</span>
+              </div>
+              <div className={`mt-1 text-xs ${colors.isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                {syncOnlyMinimizedCardState.detail || '可恢复查看完整同步面板'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleRestoreSyncOnlyDialog}
+              className={`rounded-lg p-2 transition-colors ${
+                colors.isDark ? 'text-slate-400 hover:bg-slate-800 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+              }`}
+              title="恢复"
+            >
+              <Square className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="px-4 pb-4">
+            <div className="flex items-center justify-between text-xs">
+              <span className={colors.isDark ? 'text-slate-400' : 'text-slate-500'}>同步进度</span>
+              <span className={`font-semibold ${colors.isDark ? 'text-slate-200' : 'text-slate-700'}`}>
+                {syncOnlyMinimizedCardState.progressLabel}
+              </span>
+            </div>
+            <div className={`mt-2 h-2 overflow-hidden rounded-full ${colors.isDark ? 'bg-slate-800' : 'bg-slate-200'}`}>
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)] transition-all"
+                style={{ width: `${syncOnlyMinimizedCardState.progressPercent}%` }}
+              />
+            </div>
+            <div className={`mt-2 text-right text-xs font-semibold ${colors.isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+              {syncOnlyMinimizedCardState.progressPercent}%
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1967,6 +2067,9 @@ interface SyncActionDialogProps {
   onClose: () => void;
   onCancelSync: () => void;
   onConfirm: () => void;
+  onSecondaryAction?: () => void;
+  minimizable?: boolean;
+  onMinimize?: () => void;
   onOpenSyncSettings: () => void;
 }
 
@@ -2051,10 +2154,14 @@ const SyncActionDialog: React.FC<SyncActionDialogProps> = ({
   onClose,
   onCancelSync,
   onConfirm,
+  onSecondaryAction,
+  minimizable = false,
+  onMinimize,
   onOpenSyncSettings,
 }) => {
   const { colors } = useTheme();
   const copy = resolveSyncDialogCopy(mode);
+  const headerControls = resolveSyncDialogHeaderControls({ minimizable, loading });
   const isScreeningMode = mode === 'screening';
   const syncProgressPercent = Math.max(0, Math.min(100, Math.round(syncStatus?.progressPercent ?? 0)));
   const syncRecentEvents = (syncStatus?.events ?? []).slice(-3).reverse();
@@ -2087,13 +2194,26 @@ const SyncActionDialog: React.FC<SyncActionDialogProps> = ({
               {copy.description}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            disabled={loading}
-            className={`rounded-full p-2 ${colors.isDark ? 'text-slate-400 hover:bg-slate-800/80 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'} disabled:opacity-50`}
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            {headerControls.showMinimize && onMinimize && (
+              <button
+                type="button"
+                onClick={onMinimize}
+                disabled={headerControls.minimizeDisabled}
+                className={`rounded-full p-2 ${colors.isDark ? 'text-slate-400 hover:bg-slate-800/80 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'} disabled:opacity-50`}
+                title="最小化"
+              >
+                <Minus className="h-4 w-4" />
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              disabled={headerControls.closeDisabled}
+              className={`rounded-full p-2 ${colors.isDark ? 'text-slate-400 hover:bg-slate-800/80 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'} disabled:opacity-50`}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         <div className="space-y-4 px-6 py-5">
@@ -2176,8 +2296,8 @@ const SyncActionDialog: React.FC<SyncActionDialogProps> = ({
                   </label>
                   <div className={`mt-2 text-xs ${colors.isDark ? 'text-slate-500' : 'text-slate-400'}`}>
                     {testMode
-                      ? '勾选后，本次会只同步并筛选这批股票。'
-                      : '不勾选时，本次会基于当前市场范围做全量同步和全量筛选。'}
+                      ? '勾选后，本次同步或筛选都只处理这批股票。'
+                      : '不勾选时，本次会基于当前市场范围执行全量同步或全量筛选。'}
                   </div>
                 </div>
               )}
@@ -2280,6 +2400,21 @@ const SyncActionDialog: React.FC<SyncActionDialogProps> = ({
             >
               {isSyncRunning ? '取消同步' : '取消'}
             </button>
+            {isScreeningMode && !syncStarted && copy.secondaryActionLabel && (
+              <button
+                type="button"
+                onClick={onSecondaryAction}
+                disabled={loading}
+                className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-60 ${
+                  colors.isDark
+                    ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20'
+                    : 'border-cyan-500/40 bg-cyan-50 text-cyan-700 hover:bg-cyan-100'
+                }`}
+              >
+                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+                <span>{copy.secondaryActionLabel}</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={onConfirm}
@@ -2287,7 +2422,7 @@ const SyncActionDialog: React.FC<SyncActionDialogProps> = ({
               className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[var(--accent)] to-[var(--accent-2)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
             >
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-              <span>{loading ? (isScreeningMode ? '同步并筛选中...' : '同步中...') : copy.confirmLabel}</span>
+              <span>{loading ? (isScreeningMode ? '处理中...' : '同步中...') : copy.primaryActionLabel}</span>
             </button>
           </div>
         </div>

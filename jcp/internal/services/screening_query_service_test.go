@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -76,6 +78,27 @@ func TestScreeningQueryBuildPromptIncludesTradingWindowAndLimitUpRules(t *testin
 		"“N天内有一天”表示 MAX(事件标记) = 1",
 		"is_up",
 		"is_limit_up",
+	} {
+		if !strings.Contains(prompt, fragment) {
+			t.Fatalf("prompt %q does not contain %q", prompt, fragment)
+		}
+	}
+}
+
+func TestScreeningQueryBuildPromptIncludesStoredMarketValues(t *testing.T) {
+	configService, store := newScreeningSyncTestServices(t)
+
+	service := NewScreeningQueryService(configService, store, &fakeScreeningSQLGenerator{})
+	prompt := service.buildPrompt(ScreeningQueryRequest{
+		Prompt:      "找最近三天上涨的沪深股票",
+		ResultMode:  ScreeningResultModeTopN,
+		ResultLimit: 50,
+	})
+
+	for _, fragment := range []string{
+		"market 字段的实际取值固定为：上海、深圳、北京",
+		"不要写成 SH、SZ、BJ",
+		"不要写成 沪市、深市、北交所",
 	} {
 		if !strings.Contains(prompt, fragment) {
 			t.Fatalf("prompt %q does not contain %q", prompt, fragment)
@@ -236,6 +259,105 @@ ORDER BY change_percent DESC
 	}
 }
 
+func TestValidateScreeningSQLRejectsOrderByUnknownOutputColumn(t *testing.T) {
+	_, err := validateScreeningSQL(`
+SELECT
+  symbol,
+  name,
+  change_percent AS score,
+  snapshot_trade_date,
+  price,
+  change_percent,
+  volume,
+  amount
+FROM v_stock_latest_daily
+ORDER BY low DESC
+`, ScreeningResultModeUnlimited, 0, false)
+	if err == nil {
+		t.Fatalf("validateScreeningSQL() error = nil, want ORDER BY rejection")
+	}
+	if !strings.Contains(err.Error(), "ORDER BY") {
+		t.Fatalf("validateScreeningSQL() error = %v, want ORDER BY context", err)
+	}
+}
+
+func TestBuildScreeningCountSQLRemovesOutermostOrderByOnly(t *testing.T) {
+	sqlText := `
+WITH ranked AS (
+  SELECT
+    symbol,
+    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY trade_date DESC) AS rn
+  FROM daily_snapshots
+)
+SELECT
+  symbol,
+  symbol AS name,
+  1 AS score,
+  '2026-03-19' AS snapshot_trade_date,
+  1 AS price,
+  1 AS change_percent,
+  1 AS volume,
+  1 AS amount
+FROM ranked
+WHERE rn = 1
+ORDER BY score DESC
+`
+
+	countSQL, err := buildScreeningCountSQL(sqlText)
+	if err != nil {
+		t.Fatalf("buildScreeningCountSQL() error = %v", err)
+	}
+	if strings.Contains(strings.ToUpper(countSQL), "ORDER BY SCORE DESC") {
+		t.Fatalf("count SQL still contains outer ORDER BY: %s", countSQL)
+	}
+	if !strings.Contains(strings.ToUpper(countSQL), "ROW_NUMBER() OVER (PARTITION BY SYMBOL ORDER BY TRADE_DATE DESC)") {
+		t.Fatalf("count SQL removed window ORDER BY unexpectedly: %s", countSQL)
+	}
+}
+
+func TestScreeningQueryRunLogsSQLWhenExecutionFails(t *testing.T) {
+	configService, store := newScreeningSyncTestServices(t)
+	seedScreeningQueryFixture(t, store)
+
+	restoreStderr, output := captureStderr(t)
+	defer restoreStderr()
+
+	service := NewScreeningQueryService(configService, store, &fakeScreeningSQLGenerator{
+		sql: `
+SELECT
+  symbol,
+  name,
+  change_percent AS score,
+  snapshot_trade_date,
+  price,
+  change_percent,
+  volume,
+  amount
+FROM v_stock_latest_daily
+ORDER BY low DESC
+`,
+	})
+
+	_, err := service.Run(context.Background(), ScreeningQueryRequest{
+		Prompt:      "按 low 排序",
+		ResultMode:  ScreeningResultModeUnlimited,
+		ResultLimit: 0,
+		Page:        1,
+		PageSize:    50,
+	})
+	if err == nil {
+		t.Fatalf("Run() error = nil, want execution rejection")
+	}
+
+	logOutput := output()
+	if !strings.Contains(logOutput, "screening.query") {
+		t.Fatalf("stderr log = %q, want screening.query module", logOutput)
+	}
+	if !strings.Contains(logOutput, "ORDER BY low DESC") {
+		t.Fatalf("stderr log = %q, want failed SQL snippet", logOutput)
+	}
+}
+
 func TestScreeningQueryRunRestrictsResultsToUniverseSymbols(t *testing.T) {
 	configService, store := newScreeningSyncTestServices(t)
 	seedScreeningQueryFixture(t, store)
@@ -279,6 +401,77 @@ LIMIT 5
 	}
 	if response.Results[0].Symbol != "sz000001" {
 		t.Fatalf("response.Results[0].Symbol = %q, want sz000001", response.Results[0].Symbol)
+	}
+}
+
+func TestScreeningQueryRunNormalizesMarketAliasesInGeneratedSQL(t *testing.T) {
+	configService, store := newScreeningSyncTestServices(t)
+	seedScreeningQueryFixture(t, store)
+
+	service := NewScreeningQueryService(configService, store, &fakeScreeningSQLGenerator{
+		sql: `
+SELECT
+  symbol,
+  name,
+  change_percent AS score,
+  snapshot_trade_date,
+  price,
+  change_percent,
+  volume,
+  amount
+FROM v_stock_latest_daily
+WHERE market IN ('SH', 'SZ')
+ORDER BY change_percent DESC
+LIMIT 2
+`,
+	})
+
+	response, err := service.Run(context.Background(), ScreeningQueryRequest{
+		Prompt:      "找沪深市场里涨幅最高的两只股票",
+		ResultMode:  ScreeningResultModeTopN,
+		ResultLimit: 2,
+		Page:        1,
+		PageSize:    50,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if response.TotalCount != 2 {
+		t.Fatalf("response.TotalCount = %d, want 2", response.TotalCount)
+	}
+	if len(response.Results) != 2 {
+		t.Fatalf("len(response.Results) = %d, want 2", len(response.Results))
+	}
+	if response.Results[0].Symbol != "sh600000" || response.Results[1].Symbol != "sz000001" {
+		t.Fatalf("response.Results = %#v", response.Results)
+	}
+	if !strings.Contains(response.GeneratedSQL, "market IN ('上海', '深圳')") {
+		t.Fatalf("response.GeneratedSQL = %q, want normalized market literals", response.GeneratedSQL)
+	}
+}
+
+func TestValidateScreeningSQLNormalizesChineseMarketAliases(t *testing.T) {
+	sqlText, err := validateScreeningSQL(`
+SELECT
+  symbol,
+  name,
+  change_percent AS score,
+  snapshot_trade_date,
+  price,
+  change_percent,
+  volume,
+  amount
+FROM v_stock_latest_daily
+WHERE market IN ('沪市', '深市')
+ORDER BY change_percent DESC
+LIMIT 2
+`, ScreeningResultModeTopN, 2, false)
+	if err != nil {
+		t.Fatalf("validateScreeningSQL() error = %v", err)
+	}
+	if !strings.Contains(sqlText, "market IN ('上海', '深圳')") {
+		t.Fatalf("sqlText = %q, want normalized market literals", sqlText)
 	}
 }
 
@@ -808,6 +1001,28 @@ type fakeScreeningSQLGenerator struct {
 	err                 error
 	observedTimeout     time.Duration
 	observedHasDeadline bool
+}
+
+func captureStderr(t *testing.T) (func(), func() string) {
+	t.Helper()
+
+	original := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	os.Stderr = writer
+
+	return func() {
+		_ = writer.Close()
+		os.Stderr = original
+	}, func() string {
+		_ = writer.Close()
+		data, _ := io.ReadAll(reader)
+		_ = reader.Close()
+		os.Stderr = original
+		return string(data)
+	}
 }
 
 func (f *fakeScreeningSQLGenerator) GenerateSQL(ctx context.Context, prompt string, aiConfigID string) (string, error) {
