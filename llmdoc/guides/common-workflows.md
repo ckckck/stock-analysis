@@ -4,7 +4,7 @@
 
 1. 进入 `jcp/`，先安装前端依赖并下载 Go 依赖；仓库 README 明确给出 `cd frontend && npm install && cd ..` 与 `go mod download`，见 `jcp/README.md:92`。
 2. 用 `wails dev` 启动开发模式；前端脚本定义在 `jcp/frontend/package.json:6`，README 运行命令见 `jcp/README.md:102`。
-3. 若只需要前端验证，可先跑 `npm run test` 做前端纯函数回归，再执行 `npm run build` 做打包校验；两者都在 `jcp/frontend/package.json` 中定义，见 `jcp/frontend/package.json:6`。
+3. 若只需要前端验证，可先跑 `npm run test` 做前端纯函数回归，再执行 `npm run build` 做打包校验；两者都在 `jcp/frontend/package.json` 中定义，见 `jcp/frontend/package.json:6`。后端回归使用 `go test ./...`，其中财联社快讯解析测试已改为 `httptest` 本地夹具，不依赖线上 `cls.cn` 当前可用性，见 `jcp/internal/services/news_service_test.go:9`、`jcp/internal/services/news_service.go:14`。
 4. 验证启动是否完整：
    - 桌面窗口能打开且未崩溃；窗口由 `jcp/main.go:33` 配置。
    - `startup()` 已启动市场推送；对应逻辑见 `jcp/app.go:211`。

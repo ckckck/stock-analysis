@@ -1,51 +1,74 @@
 package services
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
-func TestGetTelegraphList(t *testing.T) {
+func TestGetTelegraphListParsesTelegraphs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`
+			<div class="telegraph-item">
+				<div class="telegraph-content-box">
+					<span class="telegraph-time-box">09:30</span>
+					<span><div> 第一条
+						快讯内容 </div></span>
+				</div>
+				<div class="subject-bottom-box"><a href="/detail/123">详情</a></div>
+			</div>
+			<div class="telegraph-item">
+				<div class="telegraph-content-box">
+					<span class="telegraph-time-box">09:31</span>
+					<span><div>第二条快讯内容</div></span>
+				</div>
+			</div>
+		`))
+	}))
+	defer server.Close()
+
 	service := NewNewsService()
+	service.client = server.Client()
+	service.telegraphURL = server.URL
 
 	telegraphs, err := service.GetTelegraphList()
 	if err != nil {
 		t.Fatalf("获取快讯失败: %v", err)
 	}
 
-	t.Logf("获取到 %d 条快讯", len(telegraphs))
-
-	if len(telegraphs) == 0 {
-		t.Error("未获取到任何快讯，可能是解析选择器有问题")
-		return
+	if len(telegraphs) != 2 {
+		t.Fatalf("快讯数量 = %d，期望 2", len(telegraphs))
 	}
-
-	// 打印前5条快讯
-	for i, tg := range telegraphs {
-		if i >= 5 {
-			break
-		}
-		t.Logf("[%d] 时间: %s", i+1, tg.Time)
-		t.Logf("    内容: %s", truncate(tg.Content, 80))
-		t.Logf("    URL: %s", tg.URL)
+	if telegraphs[0].Time != "09:30" {
+		t.Fatalf("第一条时间 = %q，期望 09:30", telegraphs[0].Time)
 	}
-
-	// 验证 URL 格式
-	hasURL := false
-	for _, tg := range telegraphs {
-		if tg.URL != "" {
-			hasURL = true
-			break
-		}
+	if telegraphs[0].Content != "第一条 快讯内容" {
+		t.Fatalf("第一条内容 = %q，期望清理后的内容", telegraphs[0].Content)
 	}
-	if !hasURL {
-		t.Log("警告: 没有解析到任何快讯 URL")
+	if telegraphs[0].URL != "https://www.cls.cn/detail/123" {
+		t.Fatalf("第一条 URL = %q", telegraphs[0].URL)
 	}
 }
 
-func TestGetLatestTelegraph(t *testing.T) {
-	service := NewNewsService()
+func TestGetLatestTelegraphUsesCachedList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`
+			<div class="telegraph-item">
+				<div class="telegraph-content-box">
+					<span class="telegraph-time-box">10:00</span>
+					<span><div>最新快讯</div></span>
+				</div>
+			</div>
+		`))
+	}))
+	defer server.Close()
 
-	// 先获取列表填充缓存
+	service := NewNewsService()
+	service.client = server.Client()
+	service.telegraphURL = server.URL
+
 	_, err := service.GetTelegraphList()
 	if err != nil {
 		t.Fatalf("获取快讯失败: %v", err)
@@ -57,15 +80,7 @@ func TestGetLatestTelegraph(t *testing.T) {
 		return
 	}
 
-	t.Logf("最新快讯时间: %s", latest.Time)
-	t.Logf("最新快讯内容: %s", truncate(latest.Content, 150))
-}
-
-// truncate 截断字符串
-func truncate(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
+	if latest.Time != "10:00" || latest.Content != "最新快讯" {
+		t.Fatalf("最新快讯 = %+v", latest)
 	}
-	return string(runes[:maxLen]) + "..."
 }

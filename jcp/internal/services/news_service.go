@@ -11,6 +11,8 @@ import (
 	"github.com/run-bigpig/jcp/internal/pkg/proxy"
 )
 
+const defaultTelegraphURL = "https://www.cls.cn/telegraph"
+
 // Telegraph 快讯数据结构
 type Telegraph struct {
 	Time    string `json:"time"`
@@ -20,7 +22,8 @@ type Telegraph struct {
 
 // NewsService 资讯服务
 type NewsService struct {
-	client *http.Client
+	client       *http.Client
+	telegraphURL string
 
 	// 缓存
 	telegraphs    []Telegraph
@@ -31,8 +34,9 @@ type NewsService struct {
 // NewNewsService 创建资讯服务
 func NewNewsService() *NewsService {
 	return &NewsService{
-		client:     proxy.GetManager().GetClientWithTimeout(10 * time.Second),
-		telegraphs: make([]Telegraph, 0),
+		client:       proxy.GetManager().GetClientWithTimeout(10 * time.Second),
+		telegraphURL: defaultTelegraphURL,
+		telegraphs:   make([]Telegraph, 0),
 	}
 }
 
@@ -49,7 +53,11 @@ func (s *NewsService) GetTelegraphList() ([]Telegraph, error) {
 	s.mu.RUnlock()
 
 	// 请求财联社快讯页面
-	req, err := http.NewRequest("GET", "https://www.cls.cn/telegraph", nil)
+	telegraphURL := s.telegraphURL
+	if telegraphURL == "" {
+		telegraphURL = defaultTelegraphURL
+	}
+	req, err := http.NewRequest("GET", telegraphURL, nil)
 	if err != nil {
 		return nil, err
 	}
